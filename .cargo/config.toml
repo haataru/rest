@@ -1,0 +1,2 @@
+[env]
+LLVM_CONFIG_PATH = "/usr/lib/llvm18/bin/llvm-config"
