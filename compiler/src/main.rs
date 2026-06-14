@@ -26,7 +26,8 @@ struct Cli {
 enum Commands {
     /// Compile .rf file to an executable
     Build {
-        input: PathBuf,
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
         #[arg(short = 'o', long, default_value = "a.out")]
         output: PathBuf,
         #[arg(short = 'O', long, default_value = "none")]
@@ -34,13 +35,15 @@ enum Commands {
     },
     /// Compile and run .rf file immediately
     Run {
-        input: PathBuf,
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
         #[arg(short = 'O', long, default_value = "none")]
         opt: String,
     },
     /// Emit LLVM IR (.ll / .bc) instead of a binary
     Llvm {
-        input: PathBuf,
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
         #[arg(short = 'o', long, default_value = "out.ll")]
         output: PathBuf,
         #[arg(short = 'O', long, default_value = "none")]
@@ -77,6 +80,7 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
                 args.push("-lrt".to_string());
                 args.push("-lm".to_string());
                 args.push("-lc".to_string());
+                args.push("-lgcc_s".to_string());
                 cmd.args(args);
             }
             #[cfg(target_os = "macos")]
@@ -146,48 +150,52 @@ or generate .ll and link manually:
     );
 }
 
-fn read_source(input: &Path) -> Result<String> {
-    if input.extension().is_none_or(|e| e != "rest") {
-        anyhow::bail!("input file must have .rest extension");
+fn read_inputs(inputs: &[PathBuf]) -> Result<String> {
+    let mut combined = String::new();
+    for input in inputs {
+        if input.extension().is_none_or(|e| e != "rest") {
+            anyhow::bail!("input file must have .rest extension");
+        }
+        if !input.exists() {
+            anyhow::bail!("input file not found: {}", input.display());
+        }
+        let src = std::fs::read_to_string(input).with_context(|| format!("failed to read {}", input.display()))?;
+        combined.push_str(&src);
+        combined.push('\n');
     }
-    if !input.exists() {
-        anyhow::bail!("input file not found: {}", input.display());
-    }
-    std::fs::read_to_string(input).with_context(|| format!("failed to read {}", input.display()))
-}
-
-fn compile_to_object(input: &Path, opt: &str) -> Result<(String, PathBuf)> {
-    let source = read_source(input)?;
-    let level = opt_level(opt)?;
-    let o_path = input.with_extension("o");
-    driver::run(&source, &o_path, level)?;
-    Ok((source, o_path))
+    Ok(combined)
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Build { input, output, opt } => {
-            let (_source, o_path) = compile_to_object(&input, &opt)?;
+        Commands::Build { inputs, output, opt } => {
+            let source = read_inputs(&inputs)?;
+            let level = opt_level(&opt)?;
+            let o_path = output.with_extension("o");
+            driver::run(&source, &o_path, level)?;
             try_linker(&o_path, &output)?;
             let _ = std::fs::remove_file(&o_path);
         }
-        Commands::Run { input, opt } => {
-            let (_source, o_path) = compile_to_object(&input, &opt)?;
-            let exe_path = input.with_extension("out");
+        Commands::Run { inputs, opt } => {
+            let source = read_inputs(&inputs)?;
+            let level = opt_level(&opt)?;
+            let o_path = PathBuf::from("temp.o");
+            let exe_path = PathBuf::from("temp.out");
+            driver::run(&source, &o_path, level)?;
             try_linker(&o_path, &exe_path)?;
             let _ = std::fs::remove_file(&o_path);
             let status = std::process::Command::new(&exe_path)
                 .status()
-                .context("failed to run compiled binary")?;
+                .context("failed to run executable")?;
             let _ = std::fs::remove_file(&exe_path);
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
             }
         }
-        Commands::Llvm { input, output, opt } => {
-            let source = read_source(&input)?;
+        Commands::Llvm { inputs, output, opt } => {
+            let source = read_inputs(&inputs)?;
             let level = opt_level(&opt)?;
             driver::run(&source, &output, level)?;
         }

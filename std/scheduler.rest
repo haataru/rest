@@ -1,0 +1,175 @@
+// Green Threads Scheduler for Rest
+
+extern "C" def epoll_create1(flags: i32) -> i32;
+extern "C" def epoll_ctl(epfd: i32, op: i32, fd: i32, event: *EpollEvent) -> i32;
+extern "C" def epoll_wait(epfd: i32, events: *EpollEvent, maxevents: i32, timeout: i32) -> i32;
+
+extern "C" def mmap(addr: *u8, length: i64, prot: i32, flags: i32, fd: i32, offset: i64) -> *u8;
+extern "C" def munmap(addr: *u8, length: i64) -> i32;
+
+
+// struct epoll_event { uint32_t events; epoll_data_t data; } __EPOLL_PACKED;
+// Size is exactly 12 bytes on x86_64.
+model EpollEvent {
+    events: i32,
+    data_fd: i32,
+    data_pad: i32,
+}
+
+model Fiber {
+    id: i32,
+    state: i32,
+    stack: *u8,
+    stack_ptr: *u8,
+}
+
+model FiberContext {
+    r15: i64,
+    r14: i64,
+    r13: i64,
+    r12: i64,
+    rbx: i64,
+    rbp: i64,
+    rip: i64,
+}
+
+model Scheduler {
+    epoll_fd: i32,
+    fibers: *u8,          // Array of Fibers (pointer to bytes, we'll cast it)
+    num_fibers: i32,
+    current_fiber: i32,   // Index of running fiber (-1 if main event loop)
+    main_stack_ptr: *u8,  // Saved RSP of the event loop
+}
+
+
+def create_scheduler() -> *Scheduler {
+    print("create_scheduler: mmap 1\n");
+    let sched_mem: *u8 = mmap(0 as *u8, 40i64, 3, 34, -1, 0i64);
+    let sched_ptr: *Scheduler = sched_mem as *Scheduler;
+    print("create_scheduler: epoll_create1\n");
+    let epfd: i32 = epoll_create1(0);
+    (*sched_ptr).epoll_fd = epfd;
+    (*sched_ptr).num_fibers = 0;
+    (*sched_ptr).current_fiber = -1;
+    print("create_scheduler: mmap 2\n");
+    (*sched_ptr).fibers = mmap(0 as *u8, 32768i64, 3, 34, -1, 0i64); // Max 1024 fibers
+    print("create_scheduler: done\n");
+    return sched_ptr;
+}
+
+// User-provided handler
+
+
+// Entry point called by assembly
+def fiber_entry(sched: *Scheduler, func_id: i32) {
+    fiber_router(sched, func_id);
+}
+
+// Helper to get a pointer to the i-th Fiber
+def get_fiber(sched: *Scheduler, index: i32) -> *Fiber {
+    // sizeof(Fiber) = 24 bytes (i32, i32, *u8, *u8) => 4+4+8+8 = 24
+    let offset: i64 = (index as i64) * 24i64;
+    let base: i64 = (*sched).fibers as i64;
+    let fiber_ptr: *Fiber = (base + offset) as *Fiber;
+    return fiber_ptr;
+}
+
+def fiber_exit(sched: *Scheduler) {
+    let current: i32 = (*sched).current_fiber;
+    let fiber: *Fiber = get_fiber(sched, current);
+    (*fiber).state = 2; // Dead
+    
+    // We do NOT munmap the stack here because we are currently RUNNING on it!
+    // The scheduler event loop will reap dead fibers later.
+
+    // Swap back to main loop
+    let main_sp_ptr: **u8 = &(*sched).main_stack_ptr;
+    __rest_swapcontext(&(*fiber).stack_ptr, (*sched).main_stack_ptr);
+}
+
+def spawn(sched: *Scheduler, func_id: i32) {
+    let f_idx: i32 = (*sched).num_fibers;
+    (*sched).num_fibers = f_idx + 1;
+    
+    // Allocate stack using mmap
+    let stack: *u8 = mmap(0 as *u8, 65536i64, 3, 34, -1, 0i64);
+    
+    // Initialize stack
+    let stack_top: i64 = (stack as i64) + 65536i64;
+    
+    // sizeof(FiberContext) = 56 bytes
+    let sp: i64 = stack_top - 56i64;
+    let ctx: *FiberContext = sp as *FiberContext;
+
+    (*ctx).r15 = 0i64;
+    (*ctx).r14 = 0i64;
+    (*ctx).r13 = func_id as i64;
+    (*ctx).r12 = sched as i64;
+    (*ctx).rbx = 0i64;
+    (*ctx).rbp = 0i64;
+    (*ctx).rip = get_fiber_entry_addr();
+    
+    let fiber: *Fiber = get_fiber(sched, f_idx);
+    (*fiber).id = f_idx;
+    (*fiber).state = 0; // Ready
+    (*fiber).stack = stack;
+    (*fiber).stack_ptr = sp as *u8;
+}
+
+// Yield execution back to the scheduler (e.g., waiting for I/O)
+def fiber_yield(sched: *Scheduler) {
+    let current: i32 = (*sched).current_fiber;
+    if current != -1 {
+        let fiber: *Fiber = get_fiber(sched, current);
+        (*fiber).state = 1; // Blocked
+        __rest_swapcontext(&(*fiber).stack_ptr, (*sched).main_stack_ptr);
+    }
+}
+
+// Run the event loop
+def scheduler_run(sched: *Scheduler) {
+    let max_events: i32 = 64;
+    // EpollEvent array
+    let events_buf: *u8 = mmap(0 as *u8, 12i64 * (max_events as i64), 3, 34, -1, 0i64);
+    let events: *EpollEvent = events_buf as *EpollEvent;
+    
+    while true {
+        // Run all ready fibers
+        let i: i32 = 0;
+        let num: i32 = (*sched).num_fibers;
+        while (i < num) {
+            let fiber: *Fiber = get_fiber(sched, i);
+            if (*fiber).state == 0 {
+                print("scheduler: swapping to fiber\n");
+                (*sched).current_fiber = i;
+                (*fiber).state = 1; // Mark running/blocked
+                __rest_swapcontext(&(*sched).main_stack_ptr, (*fiber).stack_ptr);
+                print("scheduler: returned from fiber\n");
+            }
+            i = i + 1;
+        }
+        
+        // Wait for I/O via epoll
+        // We block if there are blocked fibers, or exit if all are dead.
+        // For simplicity, wait up to 1 second.
+        let n: i32 = epoll_wait((*sched).epoll_fd, events, max_events, 1000);
+        
+        // Wake up fibers
+        let j: i32 = 0;
+        while (j < n) {
+            // events[j] is safe if we don't have stride issues.
+            // Wait, sizeof(EpollEvent) in Rest is 12! We padded it exactly!
+            // But if we index `events[j]`, Rest compiler calculates offset using sizeof(EpollEvent),
+            // which might be 12. Wait, let's just do pointer math to be safe.
+            let offset: i64 = (j as i64) * 12i64;
+            let ev: *EpollEvent = ((events_buf as i64) + offset) as *EpollEvent;
+            
+            let fd: i32 = (*ev).data_fd;
+            // The fd typically maps to a connection. The connection struct should store the fiber_id.
+            // For now, we assume fd = fiber_id for testing, or we look it up.
+            // Let's assume the user handles lookup. The user provides a callback or we wake it up.
+            // For now, just print.
+            j = j + 1;
+        }
+    }
+}

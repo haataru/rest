@@ -554,16 +554,16 @@ impl TypeChecker {
             }
             Stmt::Fn(_name, params, ret, body, decorators, span) => {
                 for dec in decorators {
-                    if !["Get", "Post", "Put", "Delete"].contains(&dec.name.as_str()) {
+                    if !["Get", "Post", "Put", "Delete", "no_mangle"].contains(&dec.name.as_str()) {
                         return Err(TypeckError::InvalidDecorator {
                             message: format!(
-                                "unknown decorator `@{}`. Expected @Get, @Post, @Put, or @Delete",
+                                "unknown decorator `@{}`. Expected @Get, @Post, @Put, @Delete, or @no_mangle",
                                 dec.name
                             ),
                             span: dec.span,
                         });
                     }
-                    if dec.arg.is_none() {
+                    if dec.name != "no_mangle" && dec.arg.is_none() {
                         return Err(TypeckError::InvalidDecorator {
                             message: format!(
                                 "decorator `@{}` requires a path argument (e.g. `(\"/path\")`)",

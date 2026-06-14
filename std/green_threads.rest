@@ -1,0 +1,68 @@
+// Test Green Threads
+extern "C" def usleep(usec: i32) -> i32;
+
+// The user defines the router.
+// This is the universal entry point for all fibers.
+@no_mangle
+def fiber_router(sched: *Scheduler, func_id: i32) {
+    print("fiber_router entered\n");
+    if func_id == 1 {
+        print("Hello from Fiber 1! Starting...\n");
+        // Simulate work
+        let i: i32 = 0;
+        while (i < 3) {
+            print("Fiber 1: yielding...\n");
+            fiber_yield(sched);
+            print("Fiber 1: resumed!\n");
+            i = i + 1;
+        }
+        print("Fiber 1: Done.\n");
+    } else {
+        if func_id == 2 {
+            print("Hello from Fiber 2!\n");
+            fiber_yield(sched);
+            print("Fiber 2: resumed!\n");
+            fiber_yield(sched);
+            print("Fiber 2: Done.\n");
+        }
+    }
+}
+
+def main() -> i32 {
+    print("Starting Scheduler...\n");
+    
+    let sched: *Scheduler = create_scheduler();
+    
+    print("Spawning fibers...\n");
+    spawn(sched, 1);
+    spawn(sched, 2);
+    
+    print("Running event loop...\n");
+    // We will do a mini run loop here
+    let i: i32 = 0;
+    while (i < 10) {
+        // Run all ready fibers
+        let idx: i32 = 0;
+        let num: i32 = (*sched).num_fibers;
+        while (idx < num) {
+            let fiber: *Fiber = get_fiber(sched, idx);
+            if (*fiber).state == 0 {
+                (*sched).current_fiber = idx;
+                (*fiber).state = 1; // Mark running
+                print("Swapping to fiber...\n");
+                __rest_swapcontext(&(*sched).main_stack_ptr, (*fiber).stack_ptr);
+                // When we return here, the fiber yielded or died.
+                if (*fiber).state == 1 {
+                    // It yielded, set back to ready
+                    (*fiber).state = 0;
+                }
+            }
+            idx = idx + 1;
+        }
+        usleep(100000); // sleep 0.1s
+        i = i + 1;
+    }
+    
+    print("Done.\n");
+    return 0;
+}

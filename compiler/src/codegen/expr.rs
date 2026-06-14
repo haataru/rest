@@ -205,15 +205,20 @@ impl<'ctx> Codegen<'ctx> {
                     Ok(result)
                 } else {
                     let ptr = arr_ptr.into_pointer_value();
+                    let elem_ty = self.type_of_expr(object, struct_field_types);
+                    let (elem_llvm_ty, target_ty) = match elem_ty {
+                        Type::Pointer(inner) => (self.hir_type_to_basic(&inner, struct_field_types), *inner),
+                        _ => (self.context.i8_type().into(), Type::I8),
+                    };
                     let gep = unsafe {
                         self.builder.build_gep(
-                            self.context.i8_type(),
+                            elem_llvm_ty,
                             ptr,
                             &[idx_val.into_int_value()],
                             "array_idx",
                         )?
                     };
-                    let loaded = self.builder.build_load(self.ptr_ty(), gep, "array_elt")?;
+                    let loaded = self.builder.build_load(elem_llvm_ty, gep, "array_elt")?;
                     Ok(loaded)
                 }
             }
@@ -365,6 +370,10 @@ impl<'ctx> Codegen<'ctx> {
                     .ok_or_else(|| anyhow::anyhow!("undefined variable `{}`", n))?;
                 let loaded = self.builder.build_load(self.ptr_ty(), ptr_val, n)?;
                 loaded.into_pointer_value()
+            }
+            HirExpr::Dereference(inner, _) => {
+                let val = self.compile_expr(inner, struct_field_types)?;
+                val.into_pointer_value()
             }
             _ => {
                 let val = self.compile_expr(object, struct_field_types)?;
@@ -785,6 +794,7 @@ impl<'ctx> Codegen<'ctx> {
                 let elem_ty = self.type_of_expr(object, struct_field_types);
                 let elem_llvm_ty = match elem_ty {
                     Type::Array(inner, _) => self.hir_type_to_basic(&inner, struct_field_types),
+                    Type::Pointer(inner) => self.hir_type_to_basic(&inner, struct_field_types),
                     _ => self.context.i8_type().into(),
                 };
                 let typed_ptr = self.builder.build_pointer_cast(ptr, self.ptr_ty(), "lvalue_array_typed")?;
