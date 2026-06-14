@@ -110,6 +110,7 @@ impl Lowerer {
                 name: name.clone(),
                 span: *span,
             }),
+            Stmt::GlobalAsm(asm, span) => Ok(HirStmt::GlobalAsm(asm.clone(), *span)),
             Stmt::If(cond, then_stmts, else_stmts, span) => {
                 let hir_cond = self.lower_expr(cond)?;
                 let hir_then: Vec<HirStmt> = then_stmts

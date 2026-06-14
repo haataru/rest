@@ -80,7 +80,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 Ok(())
             }
-            HirStmt::Fn { .. } | HirStmt::ExternFn { .. } | HirStmt::Struct { .. } => Ok(()),
+            HirStmt::Fn { .. } | HirStmt::ExternFn { .. } | HirStmt::Struct { .. } | HirStmt::GlobalAsm(..) => Ok(()),
             HirStmt::If {
                 cond, then, else_, ..
             } => self.compile_if(cond, then, else_.as_deref(), struct_field_types),

@@ -740,6 +740,9 @@ impl<'ctx> Codegen<'ctx> {
                 } => {
                     self.declare_function(name, params, ret, struct_field_types);
                 }
+                HirStmt::GlobalAsm(asm, _) => {
+                    self.module.set_inline_assembly(asm);
+                }
                 _ => {}
             }
         }

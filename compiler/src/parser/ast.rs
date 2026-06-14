@@ -31,6 +31,7 @@ pub enum Stmt {
     ),
     ExternFn(String, Vec<(String, Type)>, Option<Type>, Span),
     Struct(String, Vec<(String, Type)>, Span),
+    GlobalAsm(String, Span),
 }
 
 #[derive(Debug, Clone)]

@@ -603,8 +603,7 @@ impl TypeChecker {
                 }
                 Ok(())
             }
-            Stmt::ExternFn(_, _, _, _) => Ok(()),
-            Stmt::Struct(_, _, _) => Ok(()),
+            Stmt::Fn(..) | Stmt::ExternFn(..) | Stmt::Struct(..) | Stmt::GlobalAsm(..) => Ok(()),
             Stmt::Break(span) => {
                 if self.loop_depth == 0 {
                     return Err(TypeckError::BreakOutsideLoop { span: *span });

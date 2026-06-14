@@ -39,6 +39,15 @@ impl<'a> Parser<'a> {
                 }
                 self.parse_struct_decl()
             }
+            TokenKind::Ident(ref id) if id == "global_asm" => {
+                if !decorators.is_empty() {
+                    return Err(self.make_error(
+                        "decorators not allowed on global_asm".into(),
+                        decorators[0].span,
+                    ));
+                }
+                self.parse_global_asm()
+            }
             _ => {
                 if !decorators.is_empty() {
                     return Err(self.make_error(
@@ -212,6 +221,25 @@ impl<'a> Parser<'a> {
         }
         self.expect(&TokenKind::RBrace)?;
         Ok(Stmt::Struct(name, fields, self.span_since(start)))
+    }
+
+    fn parse_global_asm(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.peek_token().span;
+        self.advance(); // "global_asm"
+        self.expect(&TokenKind::LParen)?;
+        let asm = match self.peek_kind() {
+            TokenKind::String(ref s) => s.clone(),
+            _ => {
+                return Err(self.make_error(
+                    "expected string literal for global_asm".into(),
+                    self.peek_token().span,
+                ));
+            }
+        };
+        self.advance();
+        self.expect(&TokenKind::RParen)?;
+        self.expect_semicolon()?;
+        Ok(Stmt::GlobalAsm(asm, self.span_since(start)))
     }
 
     fn parse_let(&mut self) -> Result<Stmt, ParseError> {

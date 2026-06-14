@@ -30,6 +30,7 @@ pub enum HirStmt {
         name: String,
         span: Span,
     },
+    GlobalAsm(String, Span),
     If {
         cond: HirExpr,
         then: Vec<HirStmt>,
