@@ -1,7 +1,7 @@
 use crate::lexer::{IntegerSuffix, Span, Token, TokenKind};
 use crate::ops::{BinOp, UnOp};
-use crate::sema::Type;
 use crate::parser::ast::*;
+use crate::sema::Type;
 
 pub(crate) struct Parser<'a> {
     tokens: &'a [Token],
@@ -31,13 +31,19 @@ impl<'a> Parser<'a> {
             TokenKind::Fn => self.parse_fn_decl(decorators),
             TokenKind::Struct => {
                 if !decorators.is_empty() {
-                    return Err(self.make_error("decorators not allowed on structs".into(), decorators[0].span));
+                    return Err(self.make_error(
+                        "decorators not allowed on structs".into(),
+                        decorators[0].span,
+                    ));
                 }
                 self.parse_struct_decl()
             }
             _ => {
                 if !decorators.is_empty() {
-                    return Err(self.make_error("decorators only allowed on functions".into(), decorators[0].span));
+                    return Err(self.make_error(
+                        "decorators only allowed on functions".into(),
+                        decorators[0].span,
+                    ));
                 }
                 self.parse_stmt()
             }
@@ -50,7 +56,12 @@ impl<'a> Parser<'a> {
 
         let name = match self.peek_kind() {
             TokenKind::Ident(ref s) => s.clone(),
-            _ => return Err(self.make_error("expected identifier after `@`".into(), self.peek_token().span)),
+            _ => {
+                return Err(self.make_error(
+                    "expected identifier after `@`".into(),
+                    self.peek_token().span,
+                ));
+            }
         };
         self.advance();
 
@@ -59,7 +70,12 @@ impl<'a> Parser<'a> {
             self.advance();
             arg = match self.peek_kind() {
                 TokenKind::String(ref s) => Some(s.clone()),
-                _ => return Err(self.make_error("expected string literal in decorator".into(), self.peek_token().span)),
+                _ => {
+                    return Err(self.make_error(
+                        "expected string literal in decorator".into(),
+                        self.peek_token().span,
+                    ));
+                }
             };
             self.advance();
             if !self.peek_is(&TokenKind::RParen) {
@@ -108,7 +124,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_fn_decl(&mut self, decorators: Vec<crate::parser::Decorator>) -> Result<Stmt, ParseError> {
+    fn parse_fn_decl(
+        &mut self,
+        decorators: Vec<crate::parser::Decorator>,
+    ) -> Result<Stmt, ParseError> {
         let start = self.peek_token().span;
         self.advance(); // fn
         let name = self.expect_ident()?;
@@ -132,7 +151,14 @@ impl<'a> Parser<'a> {
         };
         self.expect(&TokenKind::LBrace)?;
         let body = self.parse_stmts_until(TokenKind::RBrace)?;
-        Ok(Stmt::Fn(name, params, ret, body, decorators, self.span_since(start)))
+        Ok(Stmt::Fn(
+            name,
+            params,
+            ret,
+            body,
+            decorators,
+            self.span_since(start),
+        ))
     }
 
     fn parse_struct_decl(&mut self) -> Result<Stmt, ParseError> {
@@ -191,7 +217,12 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(Stmt::If(cond, then_stmts, else_stmts, self.span_since(start)))
+        Ok(Stmt::If(
+            cond,
+            then_stmts,
+            else_stmts,
+            self.span_since(start),
+        ))
     }
 
     fn parse_while(&mut self) -> Result<Stmt, ParseError> {
@@ -213,7 +244,8 @@ impl<'a> Parser<'a> {
         };
         if matches!(inner, Expr::Assign(..)) {
             return Err(ParseError {
-                message: "assignment is not allowed in if/while condition; did you mean `==`?".into(),
+                message: "assignment is not allowed in if/while condition; did you mean `==`?"
+                    .into(),
                 span: expr.span(),
             });
         }
@@ -363,7 +395,10 @@ impl<'a> Parser<'a> {
                     if let Expr::Ident(name, ident_span) = expr {
                         expr = Expr::Call(name, args, self.span_since(ident_span));
                     } else {
-                        return Err(self.make_error("cannot call non-identifier".into(), self.peek_token().span));
+                        return Err(self.make_error(
+                            "cannot call non-identifier".into(),
+                            self.peek_token().span,
+                        ));
                     }
                 }
                 TokenKind::Dot => {
@@ -379,15 +414,26 @@ impl<'a> Parser<'a> {
                     let span = self.span_since(expr.span());
                     expr = Expr::ArrayIndex(Box::new(expr), Box::new(idx), span);
                 }
-                TokenKind::PlusEq | TokenKind::MinusEq | TokenKind::StarEq |
-                TokenKind::SlashEq | TokenKind::PercentEq | TokenKind::AmpEq |
-                TokenKind::PipeEq | TokenKind::CaretEq | TokenKind::LtLtEq |
-                TokenKind::GtGtEq => {
+                TokenKind::PlusEq
+                | TokenKind::MinusEq
+                | TokenKind::StarEq
+                | TokenKind::SlashEq
+                | TokenKind::PercentEq
+                | TokenKind::AmpEq
+                | TokenKind::PipeEq
+                | TokenKind::CaretEq
+                | TokenKind::LtLtEq
+                | TokenKind::GtGtEq => {
                     let lhs_span = expr.span();
                     let op = compound_to_binop(&self.peek_kind());
                     self.advance();
                     let rhs = self.parse_expression()?;
-                    let bin = Expr::Binary(Box::new(expr.clone()), op, Box::new(rhs), self.span_since(lhs_span));
+                    let bin = Expr::Binary(
+                        Box::new(expr.clone()),
+                        op,
+                        Box::new(rhs),
+                        self.span_since(lhs_span),
+                    );
                     expr = Expr::Assign(Box::new(expr), Box::new(bin), self.span_since(lhs_span));
                 }
                 TokenKind::PlusPlus => {
@@ -483,9 +529,18 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RBrace)?;
                 Ok(Expr::Struct(name, fields, self.span_since(start)))
             }
-            TokenKind::I8 | TokenKind::I16 | TokenKind::I32 | TokenKind::I64
-            | TokenKind::U8 | TokenKind::U16 | TokenKind::U32 | TokenKind::U64
-            | TokenKind::F32 | TokenKind::F64 | TokenKind::Bool | TokenKind::StringTy => {
+            TokenKind::I8
+            | TokenKind::I16
+            | TokenKind::I32
+            | TokenKind::I64
+            | TokenKind::U8
+            | TokenKind::U16
+            | TokenKind::U32
+            | TokenKind::U64
+            | TokenKind::F32
+            | TokenKind::F64
+            | TokenKind::Bool
+            | TokenKind::StringTy => {
                 let start = self.peek_token().span;
                 let ty = self.parse_base_type()?;
                 // Array literal: i32{1, 2, 3}
@@ -498,7 +553,11 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect(&TokenKind::RBrace)?;
-                Ok(Expr::ArrayLiteral(Box::new(ty), elems, self.span_since(start)))
+                Ok(Expr::ArrayLiteral(
+                    Box::new(ty),
+                    elems,
+                    self.span_since(start),
+                ))
             }
             TokenKind::LBracket => {
                 let start = self.peek_token().span;
@@ -512,7 +571,11 @@ impl<'a> Parser<'a> {
                 }
                 self.expect(&TokenKind::RBracket)?;
                 let ty = Type::Void;
-                Ok(Expr::ArrayLiteral(Box::new(ty), elems, self.span_since(start)))
+                Ok(Expr::ArrayLiteral(
+                    Box::new(ty),
+                    elems,
+                    self.span_since(start),
+                ))
             }
             TokenKind::LParen => {
                 let start = self.peek_token().span;
@@ -527,19 +590,58 @@ impl<'a> Parser<'a> {
 
     fn parse_base_type(&mut self) -> Result<Type, ParseError> {
         match self.peek_kind() {
-            TokenKind::I8 => { self.advance(); Ok(Type::I8) }
-            TokenKind::I16 => { self.advance(); Ok(Type::I16) }
-            TokenKind::I32 => { self.advance(); Ok(Type::I32) }
-            TokenKind::I64 => { self.advance(); Ok(Type::I64) }
-            TokenKind::U8 => { self.advance(); Ok(Type::U8) }
-            TokenKind::U16 => { self.advance(); Ok(Type::U16) }
-            TokenKind::U32 => { self.advance(); Ok(Type::U32) }
-            TokenKind::U64 => { self.advance(); Ok(Type::U64) }
-            TokenKind::F32 => { self.advance(); Ok(Type::F32) }
-            TokenKind::F64 => { self.advance(); Ok(Type::F64) }
-            TokenKind::Bool => { self.advance(); Ok(Type::Bool) }
-            TokenKind::StringTy => { self.advance(); Ok(Type::String) }
-            TokenKind::Void => { self.advance(); Ok(Type::Void) }
+            TokenKind::I8 => {
+                self.advance();
+                Ok(Type::I8)
+            }
+            TokenKind::I16 => {
+                self.advance();
+                Ok(Type::I16)
+            }
+            TokenKind::I32 => {
+                self.advance();
+                Ok(Type::I32)
+            }
+            TokenKind::I64 => {
+                self.advance();
+                Ok(Type::I64)
+            }
+            TokenKind::U8 => {
+                self.advance();
+                Ok(Type::U8)
+            }
+            TokenKind::U16 => {
+                self.advance();
+                Ok(Type::U16)
+            }
+            TokenKind::U32 => {
+                self.advance();
+                Ok(Type::U32)
+            }
+            TokenKind::U64 => {
+                self.advance();
+                Ok(Type::U64)
+            }
+            TokenKind::F32 => {
+                self.advance();
+                Ok(Type::F32)
+            }
+            TokenKind::F64 => {
+                self.advance();
+                Ok(Type::F64)
+            }
+            TokenKind::Bool => {
+                self.advance();
+                Ok(Type::Bool)
+            }
+            TokenKind::StringTy => {
+                self.advance();
+                Ok(Type::String)
+            }
+            TokenKind::Void => {
+                self.advance();
+                Ok(Type::Void)
+            }
             TokenKind::Ident(name) => {
                 self.advance();
                 Ok(Type::Struct(name))
@@ -560,7 +662,9 @@ impl<'a> Parser<'a> {
                     })?
                 }
                 _ => {
-                    return Err(self.make_error("expected array size".into(), self.peek_token().span));
+                    return Err(
+                        self.make_error("expected array size".into(), self.peek_token().span)
+                    );
                 }
             };
             self.expect(&TokenKind::RBracket)?;
@@ -585,16 +689,25 @@ impl<'a> Parser<'a> {
             self.advance();
             Ok(())
         } else {
-            Err(self.make_error(format!("expected {}, found {}", kind, self.peek_kind()), self.peek_token().span))
+            Err(self.make_error(
+                format!("expected {}, found {}", kind, self.peek_kind()),
+                self.peek_token().span,
+            ))
         }
     }
 
     fn peek_is(&self, kind: &TokenKind) -> bool {
-        self.tokens.get(self.pos).map(|t| &t.kind == kind).unwrap_or(false)
+        self.tokens
+            .get(self.pos)
+            .map(|t| &t.kind == kind)
+            .unwrap_or(false)
     }
 
     fn peek_kind(&self) -> TokenKind {
-        self.tokens.get(self.pos).map(|t| t.kind.clone()).unwrap_or(TokenKind::Eof)
+        self.tokens
+            .get(self.pos)
+            .map(|t| t.kind.clone())
+            .unwrap_or(TokenKind::Eof)
     }
 
     fn peek_token(&self) -> &Token {

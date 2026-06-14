@@ -62,14 +62,22 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
                     "-o".to_string(),
                     exe_path.to_string_lossy().into_owned(),
                     o_path.to_string_lossy().into_owned(),
-                    "-lc".to_string(),
-                    "-lm".to_string(),
                 ];
-                if std::path::Path::new("rest_runtime/target/debug/librest_runtime.a").exists() {
-                    args.push("rest_runtime/target/debug/librest_runtime.a".to_string());
-                    args.push("-lpthread".to_string());
-                    args.push("-ldl".to_string());
+                let mut lib_path = std::env::current_exe().unwrap();
+                lib_path.pop(); // remove `restc`
+                lib_path.push("librest_runtime.a");
+                if lib_path.exists() {
+                    args.push(lib_path.to_string_lossy().into_owned());
+                } else {
+                    args.push("-lrest_runtime".to_string()); // Fallback if installed
                 }
+                args.push("-lpthread".to_string());
+                args.push("-ldl".to_string());
+                args.push("-lgcc_s".to_string()); // Add gcc_s back
+                args.push("-lutil".to_string());
+                args.push("-lrt".to_string());
+                args.push("-lm".to_string());
+                args.push("-lc".to_string());
                 cmd.args(args);
             }
             #[cfg(target_os = "macos")]
@@ -91,13 +99,21 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
                 "-o".to_string(),
                 exe_path.to_string_lossy().into_owned(),
                 o_path.to_string_lossy().into_owned(),
-                "-lm".to_string(),
             ];
-            if std::path::Path::new("rest_runtime/target/debug/librest_runtime.a").exists() {
-                args.push("rest_runtime/target/debug/librest_runtime.a".to_string());
-                args.push("-lpthread".to_string());
-                args.push("-ldl".to_string());
+            let mut lib_path = std::env::current_exe().unwrap();
+            lib_path.pop(); // remove `restc`
+            lib_path.push("librest_runtime.a");
+            if lib_path.exists() {
+                args.push(lib_path.to_string_lossy().into_owned());
+            } else {
+                args.push("-lrest_runtime".to_string()); // Fallback if installed
             }
+            args.push("-lpthread".to_string());
+            args.push("-ldl".to_string());
+            args.push("-lgcc_s".to_string()); // Add gcc_s back
+            args.push("-lutil".to_string());
+            args.push("-lrt".to_string());
+            args.push("-lm".to_string());
             cmd.args(args);
         }
         let output = cmd
@@ -139,8 +155,7 @@ fn read_source(input: &Path) -> Result<String> {
     if !input.exists() {
         anyhow::bail!("input file not found: {}", input.display());
     }
-    std::fs::read_to_string(input)
-        .with_context(|| format!("failed to read {}", input.display()))
+    std::fs::read_to_string(input).with_context(|| format!("failed to read {}", input.display()))
 }
 
 fn compile_to_object(input: &Path, opt: &str) -> Result<(String, PathBuf)> {

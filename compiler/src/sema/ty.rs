@@ -25,19 +25,36 @@ pub enum Type {
 
 impl Type {
     pub fn is_integer(&self) -> bool {
-        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64
-            | Type::U8 | Type::U16 | Type::U32 | Type::U64)
+        matches!(
+            self,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+        )
     }
 
     /// Whether values of this type are `Copy`. Copy types are bitwise
     /// duplicated on assignment, so `let y = x;` does not actually
     /// move `x` and a subsequent use of `x` is legal.
     pub fn is_copy(&self) -> bool {
-        matches!(self,
-            Type::I8 | Type::I16 | Type::I32 | Type::I64
-            | Type::U8 | Type::U16 | Type::U32 | Type::U64
-            | Type::F32 | Type::F64
-            | Type::Bool
+        matches!(
+            self,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::F32
+                | Type::F64
+                | Type::Bool
         )
     }
 }

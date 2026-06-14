@@ -42,10 +42,14 @@ impl Lowerer {
     }
 
     fn get_expr_type(&self, expr: &Expr) -> Result<Type, LowerError> {
-        self.ctx.expr_types.get(&expr.span()).cloned().ok_or_else(|| LowerError {
-            span: expr.span(),
-            message: "cannot infer expression type".into(),
-        })
+        self.ctx
+            .expr_types
+            .get(&expr.span())
+            .cloned()
+            .ok_or_else(|| LowerError {
+                span: expr.span(),
+                message: "cannot infer expression type".into(),
+            })
     }
 
     fn lower_stmt(&mut self, stmt: &Stmt) -> Result<HirStmt, LowerError> {
@@ -56,7 +60,9 @@ impl Lowerer {
                     (_, Some(annot)) => annot.clone(),
                     (None, None) => {
                         return Err(LowerError {
-                            message: "variable declaration requires a type annotation or an initializer".into(),
+                            message:
+                                "variable declaration requires a type annotation or an initializer"
+                                    .into(),
                             span: *span,
                         });
                     }
@@ -98,11 +104,17 @@ impl Lowerer {
             }),
             Stmt::If(cond, then_stmts, else_stmts, span) => {
                 let hir_cond = self.lower_expr(cond)?;
-                let hir_then: Vec<HirStmt> =
-                    then_stmts.iter().map(|s| self.lower_stmt(s)).collect::<Result<_, _>>()?;
+                let hir_then: Vec<HirStmt> = then_stmts
+                    .iter()
+                    .map(|s| self.lower_stmt(s))
+                    .collect::<Result<_, _>>()?;
                 let hir_else = else_stmts
                     .as_ref()
-                    .map(|els| els.iter().map(|s| self.lower_stmt(s)).collect::<Result<_, _>>())
+                    .map(|els| {
+                        els.iter()
+                            .map(|s| self.lower_stmt(s))
+                            .collect::<Result<_, _>>()
+                    })
                     .transpose()?;
                 Ok(HirStmt::If {
                     cond: hir_cond,
@@ -113,8 +125,10 @@ impl Lowerer {
             }
             Stmt::While(cond, body, span) => {
                 let hir_cond = self.lower_expr(cond)?;
-                let hir_body: Vec<HirStmt> =
-                    body.iter().map(|s| self.lower_stmt(s)).collect::<Result<_, _>>()?;
+                let hir_body: Vec<HirStmt> = body
+                    .iter()
+                    .map(|s| self.lower_stmt(s))
+                    .collect::<Result<_, _>>()?;
                 Ok(HirStmt::While {
                     cond: hir_cond,
                     body: hir_body,
@@ -125,8 +139,10 @@ impl Lowerer {
                 let hir_lo = self.lower_expr(lo)?;
                 let hir_hi = self.lower_expr(hi)?;
                 let var_ty = self.get_expr_type(lo)?;
-                let hir_body: Vec<HirStmt> =
-                    body.iter().map(|s| self.lower_stmt(s)).collect::<Result<_, _>>()?;
+                let hir_body: Vec<HirStmt> = body
+                    .iter()
+                    .map(|s| self.lower_stmt(s))
+                    .collect::<Result<_, _>>()?;
                 Ok(HirStmt::For {
                     var: var.clone(),
                     var_ty,
@@ -175,29 +191,28 @@ impl Lowerer {
             }
 
             Expr::Struct(name, fields, span) => {
-                let ordered_fields: Vec<(String, Expr)> =
-                    match self.ctx.struct_types.get(name) {
-                        Some(field_order) => {
-                            let mut field_map = HashMap::new();
-                            for (n, v) in fields {
-                                field_map.insert(n.clone(), v.clone());
-                            }
-                            let mut result = Vec::new();
-                            for (field_name, _) in field_order {
-                                if let Some(val) = field_map.remove(field_name) {
-                                    result.push((field_name.clone(), val));
-                                }
-                            }
-                            if result.len() != field_order.len() {
-                                return Err(LowerError {
-                                    message: format!("missing fields in struct `{}`", name),
-                                    span: *span,
-                                });
-                            }
-                            result
+                let ordered_fields: Vec<(String, Expr)> = match self.ctx.struct_types.get(name) {
+                    Some(field_order) => {
+                        let mut field_map = HashMap::new();
+                        for (n, v) in fields {
+                            field_map.insert(n.clone(), v.clone());
                         }
-                        None => fields.clone(),
-                    };
+                        let mut result = Vec::new();
+                        for (field_name, _) in field_order {
+                            if let Some(val) = field_map.remove(field_name) {
+                                result.push((field_name.clone(), val));
+                            }
+                        }
+                        if result.len() != field_order.len() {
+                            return Err(LowerError {
+                                message: format!("missing fields in struct `{}`", name),
+                                span: *span,
+                            });
+                        }
+                        result
+                    }
+                    None => fields.clone(),
+                };
                 let lowered: Result<Vec<(String, HirExpr)>, _> = ordered_fields
                     .iter()
                     .map(|(n, v)| Ok((n.clone(), self.lower_expr(v)?)))
@@ -252,7 +267,11 @@ impl Lowerer {
             Expr::ArrayIndex(arr, idx, span) => {
                 let object = Box::new(self.lower_expr(arr)?);
                 let index = Box::new(self.lower_expr(idx)?);
-                Ok(HirExpr::ArrayIndex { object, index, span: *span })
+                Ok(HirExpr::ArrayIndex {
+                    object,
+                    index,
+                    span: *span,
+                })
             }
             Expr::ArrayLiteral(ty, elems, span) => {
                 let lowered: Result<Vec<HirExpr>, _> =
@@ -283,7 +302,11 @@ impl Lowerer {
             Expr::Assign(lhs, rhs, span) => {
                 let l = Box::new(self.lower_expr(lhs)?);
                 let r = Box::new(self.lower_expr(rhs)?);
-                Ok(HirExpr::Assign { lhs: l, rhs: r, span: *span })
+                Ok(HirExpr::Assign {
+                    lhs: l,
+                    rhs: r,
+                    span: *span,
+                })
             }
             Expr::Paren(inner, _) => self.lower_expr(inner),
         }

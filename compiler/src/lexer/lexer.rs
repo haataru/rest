@@ -137,7 +137,12 @@ impl<'a> Lexer<'a> {
                 span: self.span_at(start, self.pos, start_line, start_col),
             });
         }
-        let raw = self.bytes_to_str(&self.bytes[digits_start..self.pos], start, start_line, start_col)?;
+        let raw = self.bytes_to_str(
+            &self.bytes[digits_start..self.pos],
+            start,
+            start_line,
+            start_col,
+        )?;
         for &c in raw.as_bytes() {
             if !Self::is_valid_digit(c, radix) {
                 return Err(LexError {
@@ -148,8 +153,9 @@ impl<'a> Lexer<'a> {
         }
         let val = i64::from_str_radix(raw, radix).map_err(|e| LexError {
             message: match e.kind() {
-                std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow =>
-                    format!("{} literal overflow: `{}`", name, raw),
+                std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow => {
+                    format!("{} literal overflow: `{}`", name, raw)
+                }
                 _ => format!("invalid {} literal `{}`", name, raw),
             },
             span: self.span_at(start, self.pos, start_line, start_col),
@@ -287,12 +293,9 @@ impl<'a> Lexer<'a> {
                 while run_end < self.bytes.len() && self.bytes[run_end] >= 0x80 {
                     run_end += 1;
                 }
-                let chunk = std::str::from_utf8(&self.bytes[run_start..run_end])
-                    .map_err(|e| LexError {
-                        message: format!(
-                            "invalid UTF-8 in string literal: {}",
-                            e
-                        ),
+                let chunk =
+                    std::str::from_utf8(&self.bytes[run_start..run_end]).map_err(|e| LexError {
+                        message: format!("invalid UTF-8 in string literal: {}", e),
                         span: self.span_at(run_start, run_end, self.line, self.col),
                     })?;
                 self.col += chunk.chars().count();
@@ -382,7 +385,10 @@ impl<'a> Lexer<'a> {
         if self.pos + 1 < self.bytes.len() && self.bytes[self.pos + 1] == b'+' {
             self.bump();
             self.bump();
-            Token::new(TokenKind::PlusPlus, self.span_at(start, self.pos, line, col))
+            Token::new(
+                TokenKind::PlusPlus,
+                self.span_at(start, self.pos, line, col),
+            )
         } else {
             self.bump_or_assign(start, line, col, TokenKind::Plus, TokenKind::PlusEq)
         }
@@ -392,7 +398,10 @@ impl<'a> Lexer<'a> {
         if self.pos + 1 < self.bytes.len() && self.bytes[self.pos + 1] == b'-' {
             self.bump();
             self.bump();
-            Token::new(TokenKind::MinusMinus, self.span_at(start, self.pos, line, col))
+            Token::new(
+                TokenKind::MinusMinus,
+                self.span_at(start, self.pos, line, col),
+            )
         } else if self.pos + 1 < self.bytes.len() && self.bytes[self.pos + 1] == b'>' {
             self.bump();
             self.bump();
@@ -635,7 +644,13 @@ impl<'a> Lexer<'a> {
     /// lexer bug — but we surface it as a proper error rather than
     /// panicking, matching how `lex_string` already handles non-ASCII
     /// bytes.
-    fn bytes_to_str<'b>(&self, bytes: &'b [u8], start: usize, start_line: usize, start_col: usize) -> Result<&'b str, LexError> {
+    fn bytes_to_str<'b>(
+        &self,
+        bytes: &'b [u8],
+        start: usize,
+        start_line: usize,
+        start_col: usize,
+    ) -> Result<&'b str, LexError> {
         std::str::from_utf8(bytes).map_err(|e| LexError {
             message: format!("invalid UTF-8 in lexer buffer: {}", e),
             span: self.span_at(start, start + bytes.len(), start_line, start_col),
@@ -647,9 +662,12 @@ fn integer_suffix_str_len(s: IntegerSuffix) -> usize {
     match s {
         IntegerSuffix::None => 0,
         IntegerSuffix::I8 | IntegerSuffix::U8 => 2,
-        IntegerSuffix::I16 | IntegerSuffix::U16
-        | IntegerSuffix::I32 | IntegerSuffix::U32
-        | IntegerSuffix::I64 | IntegerSuffix::U64 => 3,
+        IntegerSuffix::I16
+        | IntegerSuffix::U16
+        | IntegerSuffix::I32
+        | IntegerSuffix::U32
+        | IntegerSuffix::I64
+        | IntegerSuffix::U64 => 3,
     }
 }
 

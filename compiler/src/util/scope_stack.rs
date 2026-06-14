@@ -7,7 +7,9 @@ pub(crate) struct ScopeStack<T> {
 
 impl<T> ScopeStack<T> {
     pub fn new() -> Self {
-        Self { scopes: vec![HashMap::new()] }
+        Self {
+            scopes: vec![HashMap::new()],
+        }
     }
 
     pub fn enter(&mut self) {
@@ -28,6 +30,9 @@ impl<T> ScopeStack<T> {
     }
 
     pub fn define(&mut self, name: String, val: T) {
-        self.scopes.last_mut().expect("ScopeStack::define called on empty stack").insert(name, val);
+        self.scopes
+            .last_mut()
+            .expect("ScopeStack::define called on empty stack")
+            .insert(name, val);
     }
 }

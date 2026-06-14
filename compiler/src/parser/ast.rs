@@ -1,6 +1,6 @@
-use crate::lexer::Span;
-use crate::lexer::IntegerSuffix;
 use crate::lexer::FloatSuffix;
+use crate::lexer::IntegerSuffix;
+use crate::lexer::Span;
 use crate::ops::{BinOp, UnOp};
 use crate::sema::Type;
 
@@ -21,7 +21,14 @@ pub enum Stmt {
     Break(Span),
     Continue(Span),
     Return(Option<Expr>, Span),
-    Fn(String, Vec<(String, Type)>, Option<Type>, Vec<Stmt>, Vec<Decorator>, Span),
+    Fn(
+        String,
+        Vec<(String, Type)>,
+        Option<Type>,
+        Vec<Stmt>,
+        Vec<Decorator>,
+        Span,
+    ),
     Struct(String, Vec<(String, Type)>, Span),
 }
 

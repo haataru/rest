@@ -1,9 +1,10 @@
 # Build
-/target
-/rest_runtime/target
+**/target/
 *.o
 *.bc
-out.ll
+*.ll
+*.out
+*_bin
 
 # Dependencies
 Cargo.lock

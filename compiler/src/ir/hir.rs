@@ -60,7 +60,11 @@ pub enum HirExpr {
     /// distinguish Copy types (i32, bool, f32, ...) from owned types
     /// (string, struct, array) when deciding whether a `let y = x;`
     /// actually moves `x`.
-    Ident { name: String, ty: Type, span: Span },
+    Ident {
+        name: String,
+        ty: Type,
+        span: Span,
+    },
 
     AllocStruct(String, Vec<(String, HirExpr)>, Span),
     Call(String, Vec<HirExpr>, Span),

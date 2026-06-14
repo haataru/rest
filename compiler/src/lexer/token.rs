@@ -135,7 +135,7 @@ pub enum TokenKind {
     CaretEq,
     LtLtEq,
     GtGtEq,
-    At,       // @
+    At, // @
 
     Eof,
 }

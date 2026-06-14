@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::lexer::{IntegerSuffix, Span};
 use crate::ops::BinOp;
 use crate::parser::{Expr, Stmt};
-use crate::util::ScopeStack;
 use crate::sema::ty::{float_suffix_to_type, suffix_to_type};
 use crate::sema::{Type, TypeContext};
+use crate::util::ScopeStack;
 
 #[derive(Debug, Clone)]
 pub enum TypeckError {
@@ -112,11 +112,7 @@ impl std::fmt::Display for TypeckError {
                 )
             }
             TypeckError::InvalidDecorator { message, span } => {
-                write!(
-                    f,
-                    "type error at {}:{}: {}",
-                    span.line, span.col, message
-                )
+                write!(f, "type error at {}:{}: {}", span.line, span.col, message)
             }
             TypeckError::NotAStruct { name, span } => {
                 write!(
@@ -189,11 +185,7 @@ impl std::fmt::Display for TypeckError {
                     span.line, span.col, field, name
                 )
             }
-            TypeckError::LiteralOutOfRange {
-                value,
-                ty,
-                span,
-            } => {
+            TypeckError::LiteralOutOfRange { value, ty, span } => {
                 write!(
                     f,
                     "type error at {}:{}: literal `{}` does not fit in type `{}`",
@@ -201,32 +193,73 @@ impl std::fmt::Display for TypeckError {
                 )
             }
             TypeckError::BreakOutsideLoop { span } => {
-                write!(f, "type error at {}:{}: break outside loop", span.line, span.col)
+                write!(
+                    f,
+                    "type error at {}:{}: break outside loop",
+                    span.line, span.col
+                )
             }
             TypeckError::ContinueOutsideLoop { span } => {
-                write!(f, "type error at {}:{}: continue outside loop", span.line, span.col)
+                write!(
+                    f,
+                    "type error at {}:{}: continue outside loop",
+                    span.line, span.col
+                )
             }
             TypeckError::ReturnOutsideFunction { span } => {
-                write!(f, "type error at {}:{}: return outside function", span.line, span.col)
+                write!(
+                    f,
+                    "type error at {}:{}: return outside function",
+                    span.line, span.col
+                )
             }
             TypeckError::NotAFunction { name, span } => {
-                write!(f, "type error at {}:{}: `{}` is not a function", span.line, span.col, name)
+                write!(
+                    f,
+                    "type error at {}:{}: `{}` is not a function",
+                    span.line, span.col, name
+                )
             }
 
             TypeckError::VoidVariable { name, span } => {
-                write!(f, "type error at {}:{}: variable `{}` cannot have type `void`", span.line, span.col, name)
+                write!(
+                    f,
+                    "type error at {}:{}: variable `{}` cannot have type `void`",
+                    span.line, span.col, name
+                )
             }
             TypeckError::Unassignable { span } => {
-                write!(f, "type error at {}:{}: expression is not assignable", span.line, span.col)
+                write!(
+                    f,
+                    "type error at {}:{}: expression is not assignable",
+                    span.line, span.col
+                )
             }
             TypeckError::NotABool { context, span } => {
-                write!(f, "type error at {}:{}: {} requires `bool`, found non-bool expression", span.line, span.col, context)
+                write!(
+                    f,
+                    "type error at {}:{}: {} requires `bool`, found non-bool expression",
+                    span.line, span.col, context
+                )
             }
             TypeckError::IndexNotInteger { span } => {
-                write!(f, "type error at {}:{}: array index must be an integer", span.line, span.col)
+                write!(
+                    f,
+                    "type error at {}:{}: array index must be an integer",
+                    span.line, span.col
+                )
             }
-            TypeckError::BinaryTypeMismatch { op, expected, found, span } => {
-                write!(f, "type error at {}:{}: operator `{}` requires operands of type `{}`, found `{}`", span.line, span.col, op, expected, found)
+            TypeckError::BinaryTypeMismatch {
+                op,
+                expected,
+                found,
+                span,
+            } => {
+                write!(
+                    f,
+                    "type error at {}:{}: operator `{}` requires operands of type `{}`, found `{}`",
+                    span.line, span.col, op, expected, found
+                )
             }
         }
     }
@@ -240,7 +273,8 @@ fn has_return_value(stmts: &[Stmt]) -> bool {
             Stmt::Return(Some(_), _) => return true,
             Stmt::If(_, then_s, else_s, _) => {
                 let then_returns = has_return_value(then_s);
-                let else_returns = else_s.as_ref()
+                let else_returns = else_s
+                    .as_ref()
                     .map(|e| has_return_value(e))
                     .unwrap_or(false);
                 if then_returns && else_returns {
@@ -265,9 +299,10 @@ fn find_return_value_span(stmts: &[Stmt]) -> Option<Span> {
                     return Some(span);
                 }
                 if let Some(els) = else_s
-                    && let Some(span) = find_return_value_span(els) {
-                        return Some(span);
-                    }
+                    && let Some(span) = find_return_value_span(els)
+                {
+                    return Some(span);
+                }
             }
             Stmt::While(_, body, _) | Stmt::For(_, _, _, body, _) => {
                 if let Some(span) = find_return_value_span(body) {
@@ -378,12 +413,13 @@ impl TypeChecker {
         match stmt {
             Stmt::Let(name, ty_annot, init, span) => {
                 if let Some(annot) = ty_annot
-                    && *annot == Type::Void {
-                        return Err(TypeckError::VoidVariable {
-                            name: name.clone(),
-                            span: *span,
-                        });
-                    }
+                    && *annot == Type::Void
+                {
+                    return Err(TypeckError::VoidVariable {
+                        name: name.clone(),
+                        span: *span,
+                    });
+                }
                 let ty = match init {
                     Some(e) => {
                         // Pass the annotation as a hint so plain `Int`
@@ -404,13 +440,14 @@ impl TypeChecker {
                             });
                         }
                         if let Some(annot) = ty_annot
-                            && &inferred != annot {
-                                return Err(TypeckError::TypeMismatch {
-                                    expected: annot.clone(),
-                                    found: inferred,
-                                    span: *span,
-                                });
-                            }
+                            && &inferred != annot
+                        {
+                            return Err(TypeckError::TypeMismatch {
+                                expected: annot.clone(),
+                                found: inferred,
+                                span: *span,
+                            });
+                        }
                         inferred
                     }
                     None => {
@@ -507,13 +544,19 @@ impl TypeChecker {
                 for dec in decorators {
                     if !["Get", "Post", "Put", "Delete"].contains(&dec.name.as_str()) {
                         return Err(TypeckError::InvalidDecorator {
-                            message: format!("unknown decorator `@{}`. Expected @Get, @Post, @Put, or @Delete", dec.name),
+                            message: format!(
+                                "unknown decorator `@{}`. Expected @Get, @Post, @Put, or @Delete",
+                                dec.name
+                            ),
                             span: dec.span,
                         });
                     }
                     if dec.arg.is_none() {
                         return Err(TypeckError::InvalidDecorator {
-                            message: format!("decorator `@{}` requires a path argument (e.g. `(\"/path\")`)", dec.name),
+                            message: format!(
+                                "decorator `@{}` requires a path argument (e.g. `(\"/path\")`)",
+                                dec.name
+                            ),
                             span: dec.span,
                         });
                     }
@@ -538,19 +581,17 @@ impl TypeChecker {
                 self.exit_scope();
                 self.fn_ret_ty = prev_ret;
                 self.fn_depth -= 1;
-                if ret_ty != Type::Void
-                    && !has_return_value(body) {
-                        return Err(TypeckError::MissingReturn { span: *span });
-                    }
+                if ret_ty != Type::Void && !has_return_value(body) {
+                    return Err(TypeckError::MissingReturn { span: *span });
+                }
                 if ret_ty == Type::Void
-                    && let Some(span) = find_return_value_span(body) {
-                        return Err(TypeckError::UnexpectedReturnValue { span });
-                    }
+                    && let Some(span) = find_return_value_span(body)
+                {
+                    return Err(TypeckError::UnexpectedReturnValue { span });
+                }
                 Ok(())
             }
-            Stmt::Struct(_, _, _) => {
-                Ok(())
-            }
+            Stmt::Struct(_, _, _) => Ok(()),
             Stmt::Break(span) => {
                 if self.loop_depth == 0 {
                     return Err(TypeckError::BreakOutsideLoop { span: *span });
@@ -571,13 +612,14 @@ impl TypeChecker {
                     let val_ty = self.infer_expr(v)?;
                     if let Some(expected_ty) = &self.fn_ret_ty
                         && *expected_ty != Type::Void
-                        && val_ty != *expected_ty {
-                            return Err(TypeckError::TypeMismatch {
-                                expected: expected_ty.clone(),
-                                found: val_ty,
-                                span: *span,
-                            });
-                        }
+                        && val_ty != *expected_ty
+                    {
+                        return Err(TypeckError::TypeMismatch {
+                            expected: expected_ty.clone(),
+                            found: val_ty,
+                            span: *span,
+                        });
+                    }
                 }
                 Ok(())
             }
@@ -609,11 +651,7 @@ impl TypeChecker {
         result
     }
 
-    fn infer_expr_impl(
-        &mut self,
-        expr: &Expr,
-        hint: Option<&Type>,
-    ) -> Result<Type, TypeckError> {
+    fn infer_expr_impl(&mut self, expr: &Expr, hint: Option<&Type>) -> Result<Type, TypeckError> {
         match expr {
             Expr::Int(v, suffix, span) => {
                 // If there's a suffix, the suffix wins. Otherwise, an
@@ -621,8 +659,16 @@ impl TypeChecker {
                 // `let x: u64 = 9223372036854775807;` does not get
                 // rejected for "not fitting in i32".
                 let ty = if *suffix == IntegerSuffix::None {
-                    if let Some(t @ (Type::I8 | Type::I16 | Type::I32 | Type::I64
-                        | Type::U8 | Type::U16 | Type::U32 | Type::U64)) = hint
+                    if let Some(
+                        t @ (Type::I8
+                        | Type::I16
+                        | Type::I32
+                        | Type::I64
+                        | Type::U8
+                        | Type::U16
+                        | Type::U32
+                        | Type::U64),
+                    ) = hint
                     {
                         t.clone()
                     } else {
@@ -834,8 +880,7 @@ impl TypeChecker {
             Expr::Binary(lhs, op, rhs, span) => {
                 let lty = self.infer_expr(lhs)?;
                 let rty = self.infer_expr(rhs)?;
-                let is_str_cat = *op == BinOp::Add
-                    && lty == Type::String;
+                let is_str_cat = *op == BinOp::Add && lty == Type::String;
                 if is_str_cat {
                     if lty != rty {
                         return Err(TypeckError::TypeMismatch {
@@ -874,7 +919,10 @@ impl TypeChecker {
                     }
                     return Ok(Type::Bool);
                 }
-                let is_bitwise = matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr);
+                let is_bitwise = matches!(
+                    op,
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
+                );
                 if is_bitwise {
                     if !lty.is_integer() {
                         return Err(TypeckError::BinaryTypeMismatch {
@@ -909,24 +957,29 @@ impl TypeChecker {
                     });
                 }
                 Ok(match op {
-                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Type::Bool,
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                        Type::Bool
+                    }
                     _ => lty,
                 })
             }
             Expr::Assign(lhs, rhs, span) => {
                 match lhs.as_ref() {
-
                     Expr::FieldAccess(obj, _, _) if !matches!(obj.as_ref(), Expr::Ident(..)) => {
-                        return Err(TypeckError::Unassignable { span: *span })
+                        return Err(TypeckError::Unassignable { span: *span });
                     }
                     Expr::ArrayIndex(arr, _, _) if !matches!(arr.as_ref(), Expr::Ident(..)) => {
-                        return Err(TypeckError::Unassignable { span: *span })
+                        return Err(TypeckError::Unassignable { span: *span });
                     }
-                    Expr::Int(..) | Expr::Float(..) | Expr::String(..) | Expr::Bool(..)
-                    | Expr::Struct(..) | Expr::ArrayLiteral(..) | Expr::Call(..)
-                    | Expr::Binary(..) | Expr::Unary(..) => {
-                        return Err(TypeckError::Unassignable { span: *span })
-                    }
+                    Expr::Int(..)
+                    | Expr::Float(..)
+                    | Expr::String(..)
+                    | Expr::Bool(..)
+                    | Expr::Struct(..)
+                    | Expr::ArrayLiteral(..)
+                    | Expr::Call(..)
+                    | Expr::Binary(..)
+                    | Expr::Unary(..) => return Err(TypeckError::Unassignable { span: *span }),
                     _ => {}
                 }
                 let lhs_ty = self.infer_expr(lhs)?;
