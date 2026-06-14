@@ -61,6 +61,7 @@ impl<'a> Lexer<'a> {
             b'&' => Ok(self.amp_chain(start, start_line, start_col)),
             b'|' => Ok(self.pipe_chain(start, start_line, start_col)),
             b'^' => Ok(self.caret_or_assign(start, start_line, start_col)),
+            b'@' => Ok(self.single_char(start, start_line, start_col, TokenKind::At)),
             _ => {
                 self.bump();
                 Err(LexError {

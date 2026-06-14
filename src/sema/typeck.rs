@@ -11,6 +11,10 @@ use crate::sema::{Type, TypeContext};
 pub enum TypeckError {
     UndefinedVariable(String, Span),
     UndefinedFunction(String, Span),
+    InvalidDecorator {
+        message: String,
+        span: Span,
+    },
     NotAStruct {
         name: String,
         span: Span,
@@ -105,6 +109,13 @@ impl std::fmt::Display for TypeckError {
                     f,
                     "type error at {}:{}: undefined function `{}`",
                     span.line, span.col, name
+                )
+            }
+            TypeckError::InvalidDecorator { message, span } => {
+                write!(
+                    f,
+                    "type error at {}:{}: {}",
+                    span.line, span.col, message
                 )
             }
             TypeckError::NotAStruct { name, span } => {
@@ -301,7 +312,7 @@ impl TypeChecker {
     pub fn check(&mut self, stmts: &[Stmt]) -> Result<(), TypeckError> {
         for stmt in stmts {
             match stmt {
-                Stmt::Fn(name, params, ret, _, span) => {
+                Stmt::Fn(name, params, ret, _, _, span) => {
                     if self.lookup(name).is_some() {
                         return Err(TypeckError::DuplicateDefinition {
                             name: name.clone(),
@@ -492,7 +503,22 @@ impl TypeChecker {
                 self.loop_depth -= 1;
                 Ok(())
             }
-            Stmt::Fn(_name, params, ret, body, span) => {
+            Stmt::Fn(_name, params, ret, body, decorators, span) => {
+                for dec in decorators {
+                    if !["Get", "Post", "Put", "Delete"].contains(&dec.name.as_str()) {
+                        return Err(TypeckError::InvalidDecorator {
+                            message: format!("unknown decorator `@{}`. Expected @Get, @Post, @Put, or @Delete", dec.name),
+                            span: dec.span,
+                        });
+                    }
+                    if dec.arg.is_none() {
+                        return Err(TypeckError::InvalidDecorator {
+                            message: format!("decorator `@{}` requires a path argument (e.g. `(\"/path\")`)", dec.name),
+                            span: dec.span,
+                        });
+                    }
+                }
+
                 let ret_ty = ret.clone().unwrap_or(Type::Void);
                 self.fn_depth += 1;
                 let prev_ret = self.fn_ret_ty.replace(ret_ty.clone());

@@ -78,15 +78,17 @@ impl Lowerer {
                 let span = expr.span();
                 Ok(HirStmt::Expr(self.lower_expr(expr)?, span))
             }
-            Stmt::Fn(name, params, ret, body, span) => {
-                let ret_ty = ret.clone().unwrap_or(Type::Void);
-                let hir_body: Vec<HirStmt> =
-                    body.iter().map(|s| self.lower_stmt(s)).collect::<Result<_, _>>()?;
+            Stmt::Fn(name, params, ret, body, decorators, span) => {
+                let mut lowered_body = Vec::new();
+                for s in body {
+                    lowered_body.push(self.lower_stmt(s)?);
+                }
                 Ok(HirStmt::Fn {
                     name: name.clone(),
                     params: params.clone(),
-                    ret: ret_ty,
-                    body: hir_body,
+                    ret: ret.clone().unwrap_or(Type::Void),
+                    body: lowered_body,
+                    decorators: decorators.clone(),
                     span: *span,
                 })
             }

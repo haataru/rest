@@ -1,5 +1,6 @@
 # Build
 /target
+/rest_runtime/target
 *.o
 *.bc
 out.ll

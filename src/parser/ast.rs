@@ -5,6 +5,13 @@ use crate::ops::{BinOp, UnOp};
 use crate::sema::Type;
 
 #[derive(Debug, Clone)]
+pub struct Decorator {
+    pub name: String,
+    pub arg: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Let(String, Option<Type>, Option<Expr>, Span),
     Expr(Expr),
@@ -14,7 +21,7 @@ pub enum Stmt {
     Break(Span),
     Continue(Span),
     Return(Option<Expr>, Span),
-    Fn(String, Vec<(String, Type)>, Option<Type>, Vec<Stmt>, Span),
+    Fn(String, Vec<(String, Type)>, Option<Type>, Vec<Stmt>, Vec<Decorator>, Span),
     Struct(String, Vec<(String, Type)>, Span),
 }
 

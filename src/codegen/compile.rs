@@ -48,12 +48,16 @@ pub(crate) struct Codegen<'ctx> {
     rest_free_fn: FunctionValue<'ctx>,
     strcat_fn: FunctionValue<'ctx>,
     abort_fn: FunctionValue<'ctx>,
+    rest_register_route_fn: Option<FunctionValue<'ctx>>,
+    rest_start_server_fn: Option<FunctionValue<'ctx>>,
     functions: HashMap<String, FunctionValue<'ctx>>,
+    routes: Vec<(String, String, FunctionValue<'ctx>)>,
     loop_stack: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>, usize)>,
     owner_tracking: Vec<Vec<Owner>>,
     array_info: Vec<HashMap<String, (Type, usize)>>,
     var_types: Vec<HashMap<String, Type>>,
     runtime_compiled: bool,
+    has_routes: bool,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -121,12 +125,16 @@ impl<'ctx> Codegen<'ctx> {
             rest_free_fn,
             strcat_fn,
             abort_fn,
+            rest_register_route_fn: None,
+            rest_start_server_fn: None,
             functions: HashMap::new(),
+            routes: Vec::new(),
             loop_stack: Vec::new(),
             owner_tracking: vec![Vec::new()],
             array_info: vec![HashMap::new()],
             var_types: vec![HashMap::new()],
             runtime_compiled: false,
+            has_routes: false,
         }
     }
 
@@ -317,7 +325,16 @@ impl<'ctx> Codegen<'ctx> {
         let result_val: BasicValueEnum = result.into();
         self.builder.build_return(Some(&result_val))?;
 
-        
+        let void_ty = self.context.void_type();
+        let i8_ptr_ty = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        let handler_ty = i8_ptr_ty.fn_type(&[i8_ptr_ty.into()], false).ptr_type(inkwell::AddressSpace::default());
+        let reg_route_ty = void_ty.fn_type(&[i8_ptr_ty.into(), i8_ptr_ty.into(), handler_ty.into()], false);
+        self.rest_register_route_fn = Some(self.module.add_function("rest_register_route", reg_route_ty, Some(inkwell::module::Linkage::External)));
+
+        let i32_ty = self.context.i32_type();
+        let start_server_ty = void_ty.fn_type(&[i32_ty.into()], false);
+        self.rest_start_server_fn = Some(self.module.add_function("rest_start_server", start_server_ty, Some(inkwell::module::Linkage::External)));
+
         self.runtime_compiled = true;
         Ok(())
     }
@@ -592,6 +609,15 @@ impl<'ctx> Codegen<'ctx> {
     ) -> Result<()> {
         self.compile_runtime_fns()?;
         self.build_struct_types(stmts, struct_field_types);
+        
+        self.has_routes = stmts.iter().any(|stmt| {
+            if let HirStmt::Fn { decorators, .. } = stmt {
+                !decorators.is_empty()
+            } else {
+                false
+            }
+        });
+
         for stmt in stmts {
             if let HirStmt::Fn {
                 name, params, ret, ..
@@ -606,16 +632,115 @@ impl<'ctx> Codegen<'ctx> {
                 params,
                 ret,
                 body,
-                ..
+                decorators,
+                span: _,
             } = stmt
             {
                 let fn_val = self.functions.get(name)
                     .copied()
                     .ok_or_else(|| anyhow::anyhow!("undefined function `{}`", name))?;
+                
+                if !decorators.is_empty() {
+                    let wrapper_val = self.generate_http_wrapper(name, fn_val, params, ret)?;
+                    for dec in decorators {
+                        if let Some(path) = &dec.arg {
+                            self.routes.push((dec.name.clone(), path.clone(), wrapper_val));
+                        }
+                    }
+                }
+
                 self.compile_fn_body(fn_val, params, ret, body, struct_field_types)?;
             }
         }
+        
+        if self.has_routes {
+            self.generate_rest_main()?;
+        }
+        
         Ok(())
+    }
+
+    fn generate_rest_main(&mut self) -> Result<()> {
+        let i32_ty = self.context.i32_type();
+        let main_type = i32_ty.fn_type(&[], false);
+        let main_fn = self.module.add_function("main", main_type, None);
+        let bb = self.context.append_basic_block(main_fn, "entry");
+        self.builder.position_at_end(bb);
+
+        let i8_ptr_ty = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+
+        for (method, path, handler_fn) in &self.routes {
+            let method_global = self.builder.build_global_string_ptr(method, "method").unwrap();
+            let path_global = self.builder.build_global_string_ptr(path, "path").unwrap();
+            
+            let handler_ptr = self.builder.build_pointer_cast(handler_fn.as_global_value().as_pointer_value(), i8_ptr_ty, "handler_cast").unwrap();
+
+            self.builder.build_call(
+                self.rest_register_route_fn.unwrap(),
+                &[
+                    method_global.as_pointer_value().into(),
+                    path_global.as_pointer_value().into(),
+                    handler_ptr.into(),
+                ],
+                "reg",
+            ).unwrap();
+        }
+
+        // Call the user's main if it exists
+        if let Some(user_main) = self.functions.get("main") {
+            self.builder.build_call(*user_main, &[], "call_user_main").unwrap();
+        }
+
+        self.builder.build_call(
+            self.rest_start_server_fn.unwrap(),
+            &[i32_ty.const_int(8080, false).into()],
+            "start",
+        ).unwrap();
+
+        self.builder.build_return(Some(&i32_ty.const_int(0, false))).unwrap();
+        Ok(())
+    }
+
+    fn generate_http_wrapper(
+        &mut self,
+        name: &str,
+        original_fn: FunctionValue<'ctx>,
+        params: &[(String, Type)],
+        ret: &Type,
+    ) -> Result<FunctionValue<'ctx>> {
+        let i8_ptr_type = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        let wrapper_type = i8_ptr_type.fn_type(&[i8_ptr_type.into()], false);
+        let wrapper_name = format!("__rest_http_wrapper_{}", name);
+        let wrapper_fn = self.module.add_function(&wrapper_name, wrapper_type, Some(inkwell::module::Linkage::Internal));
+        
+        let bb = self.context.append_basic_block(wrapper_fn, "entry");
+        let prev_bb = self.builder.get_insert_block();
+        self.builder.position_at_end(bb);
+        
+        let mut args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = Vec::new();
+        let body_param = wrapper_fn.get_nth_param(0).unwrap();
+        if params.len() == 1 && params[0].1 == Type::String {
+            // Retain before passing to original_fn, since original_fn will release it
+            self.builder.build_call(self.retain_fn, &[body_param.into()], "retain_body").unwrap();
+            args.push(body_param.into());
+        }
+        
+        let call_site = self.builder.build_call(original_fn, &args, "call_orig").unwrap();
+        
+        // The wrapper owns body_param (from tiny_http), so it must release it before returning
+        self.builder.build_call(self.release_fn, &[body_param.into()], "release_body").unwrap();
+
+        if *ret == Type::String {
+            let res_val = call_site.try_as_basic_value().basic().unwrap();
+            self.builder.build_return(Some(&res_val)).unwrap();
+        } else {
+            self.builder.build_return(Some(&i8_ptr_type.const_null())).unwrap();
+        }
+        
+        if let Some(pbb) = prev_bb {
+            self.builder.position_at_end(pbb);
+        }
+        Ok(wrapper_fn)
     }
 
     // ---- Safe access helpers ----
@@ -705,7 +830,8 @@ impl<'ctx> Codegen<'ctx> {
             let llvm_ret = self.hir_type_to_basic(ret, struct_field_types);
             llvm_ret.fn_type(&llvm_param_tys, false)
         };
-        let fn_val = self.module.add_function(name, fn_type, None);
+        let actual_name = if name == "main" && self.has_routes { "__rest_user_main" } else { name };
+        let fn_val = self.module.add_function(actual_name, fn_type, None);
         self.functions.insert(name.to_string(), fn_val);
     }
 
@@ -833,14 +959,10 @@ impl<'ctx> Codegen<'ctx> {
                         });
                     }
                 }
-                let val = self.compile_expr(v, struct_field_types)?;
-                // String literals produce global constants; the caller expects an owned heap
-                // pointer, so retain before returning.
-                let ret_val = match v {
-                    HirExpr::String(_, _) => {
-                        self.builder.build_call(self.retain_fn, &[val.into()], "ret_retain")?
-                            .try_as_basic_value().basic().expect("__rest_retain should return a basic value")
-                    }
+        let val = self.compile_expr(v, struct_field_types)?;
+        // String literals produce global constants that are copied into new allocations by compile_string_literal;
+        // The expression is already owned (rc=1), so no need to retain it again!
+        let ret_val = match v {
                     HirExpr::FieldLoad { struct_name, index, .. } => {
                         if let Some(fields) = struct_field_types.get(struct_name)
                             && let Some((_, field_type)) = fields.get(*index)

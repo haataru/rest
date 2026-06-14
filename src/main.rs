@@ -56,33 +56,49 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
         if *linker == "ld" {
             #[cfg(target_os = "linux")]
             {
-                cmd.args([
-                    "-dynamic-linker",
-                    "/lib64/ld-linux-x86-64.so.2",
-                    "-o",
-                    &exe_path.to_string_lossy(),
-                    &o_path.to_string_lossy(),
-                    "-lc",
-                ]);
+                let mut args = vec![
+                    "-dynamic-linker".to_string(),
+                    "/lib64/ld-linux-x86-64.so.2".to_string(),
+                    "-o".to_string(),
+                    exe_path.to_string_lossy().into_owned(),
+                    o_path.to_string_lossy().into_owned(),
+                    "-lc".to_string(),
+                    "-lm".to_string(),
+                ];
+                if std::path::Path::new("rest_runtime/target/debug/librest_runtime.a").exists() {
+                    args.push("rest_runtime/target/debug/librest_runtime.a".to_string());
+                    args.push("-lpthread".to_string());
+                    args.push("-ldl".to_string());
+                }
+                cmd.args(args);
             }
             #[cfg(target_os = "macos")]
             {
                 cmd.args([
+                    "-lSystem",
                     "-o",
                     &exe_path.to_string_lossy(),
                     &o_path.to_string_lossy(),
-                    "-lSystem",
                 ]);
             }
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            continue;
+            #[cfg(target_os = "windows")]
+            {
+                cmd.args(["-o", &exe_path.to_string_lossy(), &o_path.to_string_lossy()]);
+            }
         } else {
-            cmd.args([
-                "-no-pie",
-                "-o",
-                &exe_path.to_string_lossy(),
-                &o_path.to_string_lossy(),
-            ]);
+            let mut args = vec![
+                "-no-pie".to_string(),
+                "-o".to_string(),
+                exe_path.to_string_lossy().into_owned(),
+                o_path.to_string_lossy().into_owned(),
+                "-lm".to_string(),
+            ];
+            if std::path::Path::new("rest_runtime/target/debug/librest_runtime.a").exists() {
+                args.push("rest_runtime/target/debug/librest_runtime.a".to_string());
+                args.push("-lpthread".to_string());
+                args.push("-ldl".to_string());
+            }
+            cmd.args(args);
         }
         let output = cmd
             .stdout(std::process::Stdio::null())

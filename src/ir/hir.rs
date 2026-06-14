@@ -17,6 +17,7 @@ pub enum HirStmt {
         params: Vec<(String, Type)>,
         ret: Type,
         body: Vec<HirStmt>,
+        decorators: Vec<crate::parser::Decorator>,
         span: Span,
     },
     Struct {

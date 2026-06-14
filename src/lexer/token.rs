@@ -135,6 +135,7 @@ pub enum TokenKind {
     CaretEq,
     LtLtEq,
     GtGtEq,
+    At,       // @
 
     Eof,
 }
@@ -236,6 +237,7 @@ impl fmt::Display for TokenKind {
             TokenKind::CaretEq => write!(f, "`^=`"),
             TokenKind::LtLtEq => write!(f, "`<<=`"),
             TokenKind::GtGtEq => write!(f, "`>>=`"),
+            TokenKind::At => write!(f, "`@`"),
             TokenKind::Eof => write!(f, "end of file"),
         }
     }
