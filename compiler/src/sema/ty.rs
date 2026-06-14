@@ -20,6 +20,7 @@ pub enum Type {
     Array(Box<Type>, usize),
     Struct(String),
     Fn(Vec<Type>, Box<Type>),
+    Pointer(Box<Type>),
     Void,
 }
 
@@ -55,6 +56,7 @@ impl Type {
                 | Type::F32
                 | Type::F64
                 | Type::Bool
+                | Type::Pointer(_)
         )
     }
 }
@@ -86,6 +88,7 @@ impl fmt::Display for Type {
                 }
                 write!(f, ") -> {}", ret)
             }
+            Type::Pointer(inner) => write!(f, "*{}", inner),
             Type::Void => write!(f, "void"),
         }
     }

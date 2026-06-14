@@ -72,6 +72,16 @@ impl<'ctx> Codegen<'ctx> {
             HirExpr::ArrayLiteral(ty, _, _) => Type::Array(ty.clone(), 0),
             HirExpr::Unary(..) => Type::I64,
             HirExpr::Binary { ty, .. } => ty.clone(),
+            HirExpr::AddressOf(inner, _) => Type::Pointer(Box::new(self.type_of_expr(inner, struct_field_types))),
+            HirExpr::Dereference(inner, _) => {
+                if let Type::Pointer(t) = self.type_of_expr(inner, struct_field_types) {
+                    *t
+                } else {
+                    Type::I64
+                }
+            }
+            HirExpr::SizeOf(..) => Type::I64,
+            HirExpr::Cast { target_ty, .. } => target_ty.clone(),
             _ => Type::I64,
         }
     }
@@ -104,6 +114,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             Type::Struct(_) => self.ptr_ty().into(),
+            Type::Pointer(_) => self.ptr_ty().into(),
             Type::Fn(..) => self.ptr_ty().into(),
             Type::Void => {
                 debug_assert!(false, "Type::Void reached codegen — typeck bug");

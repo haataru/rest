@@ -73,6 +73,10 @@ impl<'ctx> Codegen<'ctx> {
                 lhs, op, rhs, ty, ..
             } => self.compile_binary(lhs, *op, rhs, ty, struct_field_types),
             HirExpr::Assign { lhs, rhs, .. } => self.compile_assign(lhs, rhs, struct_field_types),
+            HirExpr::AddressOf(inner, _) => self.compile_address_of(inner, struct_field_types),
+            HirExpr::Dereference(inner, _) => self.compile_dereference(inner, struct_field_types),
+            HirExpr::SizeOf(ty, _) => self.compile_sizeof(ty, struct_field_types),
+            HirExpr::Cast { expr: inner, target_ty, .. } => self.compile_cast(inner, target_ty, struct_field_types),
             HirExpr::Print(arg, _) => self.compile_print(arg, struct_field_types),
         }
     }
@@ -743,5 +747,176 @@ impl<'ctx> Codegen<'ctx> {
             };
             Ok(result)
         }
+    }
+
+    pub(crate) fn compile_lvalue_ptr(
+        &mut self,
+        expr: &HirExpr,
+        struct_field_types: &StructFieldTypes,
+    ) -> Result<PointerValue<'ctx>> {
+        match expr {
+            HirExpr::Ident { name, .. } => {
+                let &(alloca, _) = self
+                    .lookup_value(name)
+                    .ok_or_else(|| anyhow::anyhow!("undefined variable `{}`", name))?;
+                Ok(alloca)
+            }
+            HirExpr::FieldLoad {
+                object,
+                index,
+                struct_name,
+                ..
+            } => {
+                let struct_ptr =
+                    self.compile_field_load_ptr(object, struct_name, struct_field_types)?;
+                let struct_ty = *self.struct_types.get(struct_name).unwrap();
+                let gep = self.builder.build_struct_gep(
+                    struct_ty,
+                    struct_ptr,
+                    *index as u32,
+                    "lvalue_field",
+                )?;
+                Ok(gep)
+            }
+            HirExpr::ArrayIndex { object, index, .. } => {
+                let idx_val = self.compile_expr(index, struct_field_types)?;
+                let arr_val = self.compile_expr(object, struct_field_types)?;
+                let ptr = arr_val.into_pointer_value();
+                let elem_ty = self.type_of_expr(object, struct_field_types);
+                let elem_llvm_ty = match elem_ty {
+                    Type::Array(inner, _) => self.hir_type_to_basic(&inner, struct_field_types),
+                    _ => self.context.i8_type().into(),
+                };
+                let typed_ptr = self.builder.build_pointer_cast(ptr, self.ptr_ty(), "lvalue_array_typed")?;
+                let gep = unsafe {
+                    self.builder.build_gep(
+                        elem_llvm_ty,
+                        typed_ptr,
+                        &[idx_val.into_int_value()],
+                        "lvalue_array_idx",
+                    )?
+                };
+                Ok(gep)
+            }
+            HirExpr::Dereference(inner, _) => {
+                let ptr_val = self.compile_expr(inner, struct_field_types)?;
+                Ok(ptr_val.into_pointer_value())
+            }
+            _ => anyhow::bail!("not an lvalue"),
+        }
+    }
+
+    pub(crate) fn compile_address_of(
+        &mut self,
+        inner: &HirExpr,
+        struct_field_types: &StructFieldTypes,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let ptr = self.compile_lvalue_ptr(inner, struct_field_types)?;
+        Ok(ptr.into())
+    }
+
+    pub(crate) fn compile_dereference(
+        &mut self,
+        inner: &HirExpr,
+        struct_field_types: &StructFieldTypes,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let ptr_val = self.compile_expr(inner, struct_field_types)?;
+        let ptr = ptr_val.into_pointer_value();
+        let inner_ty = self.type_of_expr(inner, struct_field_types);
+        let target_ty = match inner_ty {
+            Type::Pointer(t) => *t,
+            _ => Type::I32,
+        };
+        let llvm_ty = self.hir_type_to_basic(&target_ty, struct_field_types);
+        let loaded = self.builder.build_load(llvm_ty, ptr, "deref")?;
+        Ok(loaded)
+    }
+
+    pub(crate) fn compile_sizeof(
+        &mut self,
+        ty: &Type,
+        struct_field_types: &StructFieldTypes,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let llvm_ty = self.hir_type_to_basic(ty, struct_field_types);
+        let size = llvm_ty.size_of().unwrap();
+        Ok(size.into())
+    }
+
+    pub(crate) fn compile_cast(
+        &mut self,
+        inner: &HirExpr,
+        target_ty: &Type,
+        struct_field_types: &StructFieldTypes,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let val = self.compile_expr(inner, struct_field_types)?;
+        let src_ty = self.type_of_expr(inner, struct_field_types);
+        let llvm_target = self.hir_type_to_basic(target_ty, struct_field_types);
+
+        if src_ty.is_integer() && target_ty.is_integer() {
+            let src_int = val.into_int_value();
+            let target_int = llvm_target.into_int_type();
+            let src_width = src_int.get_type().get_bit_width();
+            let target_width = target_int.get_bit_width();
+            if src_width == target_width {
+                return Ok(val);
+            } else if src_width > target_width {
+                return Ok(self
+                    .builder
+                    .build_int_truncate(src_int, target_int, "cast_trunc")?
+                    .into());
+            } else if Self::is_unsigned_type(&src_ty) {
+                return Ok(self
+                    .builder
+                    .build_int_z_extend(src_int, target_int, "cast_zext")?
+                    .into());
+            } else {
+                return Ok(self
+                    .builder
+                    .build_int_s_extend(src_int, target_int, "cast_sext")?
+                    .into());
+            }
+        }
+
+        if src_ty == Type::String && matches!(target_ty, Type::Pointer(_)) {
+            let payload_ptr_ptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        self.context.i8_type(),
+                        val.into_pointer_value(),
+                        &[self.context.i64_type().const_int(16, false)],
+                        "str_payload_ptr_ptr",
+                    )?
+            };
+            let i8_ptr_ptr_ty = self.ptr_ty().ptr_type(inkwell::AddressSpace::default());
+            let casted_ptr_ptr = self.builder.build_pointer_cast(payload_ptr_ptr, i8_ptr_ptr_ty, "cast_ptr_ptr")?;
+            let payload_ptr = self.builder.build_load(self.ptr_ty(), casted_ptr_ptr, "payload_ptr")?.into_pointer_value();
+            return Ok(self
+                .builder
+                .build_pointer_cast(payload_ptr, llvm_target.into_pointer_type(), "cast_ptr")?
+                .into());
+        }
+
+        if (matches!(src_ty, Type::Pointer(_)) || matches!(src_ty, Type::Struct(_))) && matches!(target_ty, Type::Pointer(_)) {
+            return Ok(self
+                .builder
+                .build_pointer_cast(val.into_pointer_value(), llvm_target.into_pointer_type(), "cast_ptr")?
+                .into());
+        }
+
+        if matches!(src_ty, Type::Pointer(_)) && target_ty.is_integer() {
+            return Ok(self
+                .builder
+                .build_ptr_to_int(val.into_pointer_value(), llvm_target.into_int_type(), "cast_ptr2int")?
+                .into());
+        }
+
+        if src_ty.is_integer() && matches!(target_ty, Type::Pointer(_)) {
+            return Ok(self
+                .builder
+                .build_int_to_ptr(val.into_int_value(), llvm_target.into_pointer_type(), "cast_int2ptr")?
+                .into());
+        }
+
+        Ok(val)
     }
 }

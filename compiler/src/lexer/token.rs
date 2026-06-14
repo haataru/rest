@@ -70,6 +70,9 @@ pub enum TokenKind {
     Continue,
     True,
     False,
+    Extern,
+    SizeOf,
+    As,
 
     // Type keywords
     I8,
@@ -180,6 +183,9 @@ impl fmt::Display for TokenKind {
             TokenKind::Continue => write!(f, "`continue`"),
             TokenKind::True => write!(f, "`true`"),
             TokenKind::False => write!(f, "`false`"),
+            TokenKind::Extern => write!(f, "`extern`"),
+            TokenKind::SizeOf => write!(f, "`sizeof`"),
+            TokenKind::As => write!(f, "`as`"),
             TokenKind::I8 => write!(f, "`i8`"),
             TokenKind::I16 => write!(f, "`i16`"),
             TokenKind::I32 => write!(f, "`i32`"),

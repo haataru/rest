@@ -20,6 +20,12 @@ pub enum HirStmt {
         decorators: Vec<crate::parser::Decorator>,
         span: Span,
     },
+    ExternFn {
+        name: String,
+        params: Vec<(String, Type)>,
+        ret: Type,
+        span: Span,
+    },
     Struct {
         name: String,
         span: Span,
@@ -93,6 +99,14 @@ pub enum HirExpr {
         rhs: Box<HirExpr>,
         span: Span,
     },
+    AddressOf(Box<HirExpr>, Span),
+    Dereference(Box<HirExpr>, Span),
+    SizeOf(Type, Span),
+    Cast {
+        expr: Box<HirExpr>,
+        target_ty: Type,
+        span: Span,
+    },
     Print(Box<HirExpr>, Span),
 }
 
@@ -113,6 +127,10 @@ impl HirExpr {
             HirExpr::Unary(_, _, s) => *s,
             HirExpr::Binary { span, .. } => *span,
             HirExpr::Assign { span, .. } => *span,
+            HirExpr::AddressOf(_, s) => *s,
+            HirExpr::Dereference(_, s) => *s,
+            HirExpr::SizeOf(_, s) => *s,
+            HirExpr::Cast { span, .. } => *span,
             HirExpr::Print(_, s) => *s,
         }
     }

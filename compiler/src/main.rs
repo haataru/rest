@@ -73,7 +73,6 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
                 }
                 args.push("-lpthread".to_string());
                 args.push("-ldl".to_string());
-                args.push("-lgcc_s".to_string()); // Add gcc_s back
                 args.push("-lutil".to_string());
                 args.push("-lrt".to_string());
                 args.push("-lm".to_string());
@@ -110,7 +109,6 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
             }
             args.push("-lpthread".to_string());
             args.push("-ldl".to_string());
-            args.push("-lgcc_s".to_string()); // Add gcc_s back
             args.push("-lutil".to_string());
             args.push("-lrt".to_string());
             args.push("-lm".to_string());

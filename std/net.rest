@@ -1,0 +1,77 @@
+// Teaching the Rest language to communicate with the Linux kernel directly!
+// Declare system calls via FFI
+
+extern def socket(domain: i32, type: i32, protocol: i32) -> i32;
+extern def bind(sockfd: i32, addr: *u8, addrlen: i32) -> i32;
+extern def listen(sockfd: i32, backlog: i32) -> i32;
+extern def accept(sockfd: i32, addr: *u8, addrlen: *i32) -> i32;
+extern def read(fd: i32, buf: *u8, count: i64) -> i64;
+extern def write(fd: i32, buf: *u8, count: i64) -> i64;
+extern def close(fd: i32) -> i32;
+extern def strlen(s: *u8) -> i64;
+
+// C-compatible sockaddr_in structure (16 bytes)
+model SockAddr {
+    data1: i64, // family (2 bytes) + port (2 bytes) + addr (4 bytes)
+    data2: i64, // padding (8 bytes)
+}
+
+model TcpListener {
+    fd: i32,
+}
+
+model TcpStream {
+    fd: i32,
+}
+
+def tcp_bind(port: i32) -> TcpListener {
+    // AF_INET = 2, SOCK_STREAM = 1
+    let fd = socket(2, 1, 0);
+
+    // Pack port into Network Byte Order (Big Endian)
+    let port_nbo = (port / 256) + ((port % 256) * 256);
+    let family = 2; // AF_INET
+    
+    // Pack everything into a single 64-bit int (Little Endian)
+    let data = (family as i64) + ((port_nbo as i64) * 65536i64);
+    
+    let addr = SockAddr {
+        data1: data,
+        data2: 0i64
+    };
+
+    // FFI Magic: cast the structure directly to a raw byte pointer
+    let addr_ptr = addr as *u8;
+    bind(fd, addr_ptr, 16);
+    listen(fd, 128);
+
+    return TcpListener { fd: fd };
+}
+
+def tcp_accept(server: TcpListener) -> TcpStream {
+    let client_fd = accept(server.fd, 0 as *u8, 0 as *i32);
+    return TcpStream { fd: client_fd };
+}
+
+def stream_write(stream: TcpStream, text: string) {
+    let ptr = text as *u8;
+    let len = strlen(ptr);
+    write(stream.fd, ptr, len);
+}
+
+def stream_close(stream: TcpStream) {
+    close(stream.fd);
+}
+
+def main() {
+    let server = tcp_bind(8080);
+    // For simplicity, the server responds to 1 request and exits 
+    // (so CI/CD tests don't hang indefinitely, but you can use while true)
+    
+    let client = tcp_accept(server);
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 21\r\n\r\nHello from Rest Core!";
+    
+    stream_write(client, response);
+    stream_close(client);
+    close(server.fd);
+}

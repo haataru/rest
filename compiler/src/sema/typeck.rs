@@ -359,6 +359,18 @@ impl TypeChecker {
                     let param_tys: Vec<Type> = params.iter().map(|(_, t)| t.clone()).collect();
                     self.define(name.clone(), Type::Fn(param_tys, Box::new(ret_ty.clone())));
                 }
+                Stmt::ExternFn(name, params, ret, span) => {
+                    if self.lookup(name).is_some() {
+                        return Err(TypeckError::DuplicateDefinition {
+                            name: name.clone(),
+                            kind: "function".to_string(),
+                            span: *span,
+                        });
+                    }
+                    let ret_ty = ret.clone().unwrap_or(Type::Void);
+                    let param_tys: Vec<Type> = params.iter().map(|(_, t)| t.clone()).collect();
+                    self.define(name.clone(), Type::Fn(param_tys, Box::new(ret_ty)));
+                }
                 Stmt::Struct(name, fields, span) => {
                     if self.struct_fields.contains_key(name) {
                         return Err(TypeckError::DuplicateDefinition {
@@ -591,6 +603,7 @@ impl TypeChecker {
                 }
                 Ok(())
             }
+            Stmt::ExternFn(_, _, _, _) => Ok(()),
             Stmt::Struct(_, _, _) => Ok(()),
             Stmt::Break(span) => {
                 if self.loop_depth == 0 {
@@ -965,22 +978,8 @@ impl TypeChecker {
             }
             Expr::Assign(lhs, rhs, span) => {
                 match lhs.as_ref() {
-                    Expr::FieldAccess(obj, _, _) if !matches!(obj.as_ref(), Expr::Ident(..)) => {
-                        return Err(TypeckError::Unassignable { span: *span });
-                    }
-                    Expr::ArrayIndex(arr, _, _) if !matches!(arr.as_ref(), Expr::Ident(..)) => {
-                        return Err(TypeckError::Unassignable { span: *span });
-                    }
-                    Expr::Int(..)
-                    | Expr::Float(..)
-                    | Expr::String(..)
-                    | Expr::Bool(..)
-                    | Expr::Struct(..)
-                    | Expr::ArrayLiteral(..)
-                    | Expr::Call(..)
-                    | Expr::Binary(..)
-                    | Expr::Unary(..) => return Err(TypeckError::Unassignable { span: *span }),
-                    _ => {}
+                    Expr::Ident(..) | Expr::FieldAccess(..) | Expr::ArrayIndex(..) | Expr::Dereference(..) => {}
+                    _ => return Err(TypeckError::Unassignable { span: *span }),
                 }
                 let lhs_ty = self.infer_expr(lhs)?;
                 let rhs_ty = self.infer_expr(rhs)?;
@@ -994,6 +993,47 @@ impl TypeChecker {
                 Ok(Type::Void)
             }
             Expr::Paren(inner, _) => self.infer_expr(inner),
+            Expr::AddressOf(expr, span) => {
+                let inner_ty = self.infer_expr(expr)?;
+                match expr.as_ref() {
+                    Expr::Ident(..) | Expr::FieldAccess(..) | Expr::ArrayIndex(..) | Expr::Dereference(..) => {}
+                    _ => return Err(TypeckError::Unassignable { span: *span }),
+                }
+                Ok(Type::Pointer(Box::new(inner_ty)))
+            }
+            Expr::Dereference(expr, span) => {
+                let inner_ty = self.infer_expr(expr)?;
+                match inner_ty {
+                    Type::Pointer(inner) => Ok(*inner),
+                    _ => return Err(TypeckError::TypeMismatch {
+                        expected: Type::Pointer(Box::new(Type::Void)),
+                        found: inner_ty,
+                        span: *span,
+                    }),
+                }
+            }
+            Expr::SizeOf(_, _) => Ok(Type::I64),
+            Expr::Cast(expr, target_ty, span) => {
+                let expr_ty = self.infer_expr(expr)?;
+                let valid = match (&expr_ty, target_ty) {
+                    (t1, t2) if (t1.is_integer() || t1 == &Type::F32 || t1 == &Type::F64) &&
+                                (t2.is_integer() || t2 == &Type::F32 || t2 == &Type::F64) => true,
+                    (Type::Pointer(_), Type::Pointer(_)) => true,
+                    (Type::String, Type::Pointer(_)) => true,
+                    (Type::Struct(_), Type::Pointer(_)) => true,
+                    (Type::Pointer(_), t2) if t2.is_integer() => true,
+                    (t1, Type::Pointer(_)) if t1.is_integer() => true,
+                    _ => false,
+                };
+                if !valid {
+                    return Err(TypeckError::TypeMismatch {
+                        expected: target_ty.clone(),
+                        found: expr_ty,
+                        span: *span,
+                    });
+                }
+                Ok(target_ty.clone())
+            }
         }
     }
 }

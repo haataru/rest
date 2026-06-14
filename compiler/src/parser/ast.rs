@@ -29,6 +29,7 @@ pub enum Stmt {
         Vec<Decorator>,
         Span,
     ),
+    ExternFn(String, Vec<(String, Type)>, Option<Type>, Span),
     Struct(String, Vec<(String, Type)>, Span),
 }
 
@@ -49,6 +50,11 @@ pub enum Expr {
     Binary(Box<Expr>, BinOp, Box<Expr>, Span),
     Assign(Box<Expr>, Box<Expr>, Span),
     Paren(Box<Expr>, Span),
+    
+    AddressOf(Box<Expr>, Span),
+    Dereference(Box<Expr>, Span),
+    SizeOf(Type, Span),
+    Cast(Box<Expr>, Type, Span),
 }
 
 impl Expr {
@@ -69,6 +75,11 @@ impl Expr {
             Expr::Binary(_, _, _, span) => *span,
             Expr::Assign(_, _, span) => *span,
             Expr::Paren(_, span) => *span,
+            
+            Expr::AddressOf(_, span) => *span,
+            Expr::Dereference(_, span) => *span,
+            Expr::SizeOf(_, span) => *span,
+            Expr::Cast(_, _, span) => *span,
         }
     }
 }

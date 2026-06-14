@@ -37,7 +37,6 @@ pub(crate) struct Codegen<'ctx> {
     pub(crate) printf_fn: FunctionValue<'ctx>,
     pub(crate) malloc_fn: FunctionValue<'ctx>,
     pub(crate) free_fn: FunctionValue<'ctx>,
-    pub(crate) strlen_fn: FunctionValue<'ctx>,
     pub(crate) memcpy_fn: FunctionValue<'ctx>,
     pub(crate) retain_fn: FunctionValue<'ctx>,
     pub(crate) release_fn: FunctionValue<'ctx>,
@@ -73,8 +72,6 @@ impl<'ctx> Codegen<'ctx> {
         let malloc_fn = module.add_function("malloc", malloc_type, None);
         let free_type = context.void_type().fn_type(&[i8_ptr.into()], false);
         let free_fn = module.add_function("free", free_type, None);
-        let strlen_type = context.i64_type().fn_type(&[i8_ptr.into()], false);
-        let strlen_fn = module.add_function("strlen", strlen_type, None);
         let memcpy_type = context.void_type().fn_type(
             &[
                 i8_ptr.into(),
@@ -126,7 +123,6 @@ impl<'ctx> Codegen<'ctx> {
             printf_fn,
             malloc_fn,
             free_fn,
-            strlen_fn,
             memcpy_fn,
             retain_fn,
             release_fn,
@@ -736,11 +732,15 @@ impl<'ctx> Codegen<'ctx> {
             }
         });
         for stmt in stmts {
-            if let HirStmt::Fn {
-                name, params, ret, ..
-            } = stmt
-            {
-                self.declare_function(name, params, ret, struct_field_types);
+            match stmt {
+                HirStmt::Fn {
+                    name, params, ret, ..
+                } | HirStmt::ExternFn {
+                    name, params, ret, ..
+                } => {
+                    self.declare_function(name, params, ret, struct_field_types);
+                }
+                _ => {}
             }
         }
         for stmt in stmts {

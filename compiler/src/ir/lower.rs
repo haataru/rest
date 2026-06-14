@@ -98,6 +98,14 @@ impl Lowerer {
                     span: *span,
                 })
             }
+            Stmt::ExternFn(name, params, ret, span) => {
+                Ok(HirStmt::ExternFn {
+                    name: name.clone(),
+                    params: params.clone(),
+                    ret: ret.clone().unwrap_or(Type::Void),
+                    span: *span,
+                })
+            }
             Stmt::Struct(name, _, span) => Ok(HirStmt::Struct {
                 name: name.clone(),
                 span: *span,
@@ -308,6 +316,25 @@ impl Lowerer {
                     span: *span,
                 })
             }
+            Expr::AddressOf(expr, span) => {
+                let inner = Box::new(self.lower_expr(expr)?);
+                Ok(HirExpr::AddressOf(inner, *span))
+            }
+            Expr::Dereference(expr, span) => {
+                let inner = Box::new(self.lower_expr(expr)?);
+                Ok(HirExpr::Dereference(inner, *span))
+            }
+            Expr::SizeOf(ty, span) => {
+                Ok(HirExpr::SizeOf(ty.clone(), *span))
+            }
+            Expr::Cast(expr, target_ty, span) => {
+                let inner = Box::new(self.lower_expr(expr)?);
+                Ok(HirExpr::Cast {
+                    expr: inner,
+                    target_ty: target_ty.clone(),
+                    span: *span,
+                })
+            }
             Expr::Paren(inner, _) => self.lower_expr(inner),
         }
     }
@@ -326,6 +353,7 @@ impl Lowerer {
             Type::F64 => HirExpr::Float(0.0, Type::F64, span),
             Type::Bool => HirExpr::Bool(false, span),
             Type::String => HirExpr::String(String::new(), span),
+            Type::Pointer(_) => HirExpr::Int(0, Type::I64, span), // Null pointer
             Type::Struct(_) | Type::Array(_, _) | Type::Fn(..) | Type::Void => {
                 return Err(LowerError {
                     message: format!(

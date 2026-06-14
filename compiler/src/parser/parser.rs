@@ -28,6 +28,7 @@ impl<'a> Parser<'a> {
         }
 
         match self.peek_kind() {
+            TokenKind::Extern => self.parse_extern_fn_decl(),
             TokenKind::Fn => self.parse_fn_decl(decorators),
             TokenKind::Struct => {
                 if !decorators.is_empty() {
@@ -159,6 +160,39 @@ impl<'a> Parser<'a> {
             decorators,
             self.span_since(start),
         ))
+    }
+
+    fn parse_extern_fn_decl(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.peek_token().span;
+        self.advance(); // extern
+        if let TokenKind::String(ref abi) = self.peek_kind() {
+            if abi != "C" {
+                return Err(self.make_error("only `\"C\"` ABI is supported".into(), self.peek_token().span));
+            }
+            self.advance();
+        }
+        self.expect(&TokenKind::Fn)?; // def
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LParen)?;
+        let mut params = Vec::new();
+        while !self.peek_is(&TokenKind::RParen) {
+            let pname = self.expect_ident()?;
+            self.expect(&TokenKind::Colon)?;
+            let pty = self.parse_type()?;
+            params.push((pname, pty));
+            if self.peek_is(&TokenKind::Comma) {
+                self.advance();
+            }
+        }
+        self.expect(&TokenKind::RParen)?;
+        let ret = if self.peek_is(&TokenKind::Arrow) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect_semicolon()?;
+        Ok(Stmt::ExternFn(name, params, ret, self.span_since(start)))
     }
 
     fn parse_struct_decl(&mut self) -> Result<Stmt, ParseError> {
@@ -374,6 +408,18 @@ impl<'a> Parser<'a> {
                 let sub = Expr::Binary(Box::new(expr.clone()), BinOp::Sub, Box::new(one), span);
                 Ok(Expr::Assign(Box::new(expr), Box::new(sub), span))
             }
+            TokenKind::Amp => {
+                let span = self.peek_token().span;
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::AddressOf(Box::new(expr), span))
+            }
+            TokenKind::Star => {
+                let span = self.peek_token().span;
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::Dereference(Box::new(expr), span))
+            }
             _ => self.parse_postfix(),
         }
     }
@@ -471,6 +517,11 @@ impl<'a> Parser<'a> {
                     }
                     self.expect(&TokenKind::RBrace)?;
                     expr = Expr::Struct(name, fields, self.span_since(name_span));
+                }
+                TokenKind::As => {
+                    self.advance();
+                    let ty = self.parse_type()?;
+                    expr = Expr::Cast(Box::new(expr.clone()), ty, self.span_since(expr.span()));
                 }
                 _ => break,
             }
@@ -584,6 +635,14 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen)?;
                 Ok(Expr::Paren(Box::new(expr), start))
             }
+            TokenKind::SizeOf => {
+                let start = self.peek_token().span;
+                self.advance();
+                self.expect(&TokenKind::LParen)?;
+                let ty = self.parse_type()?;
+                self.expect(&TokenKind::RParen)?;
+                Ok(Expr::SizeOf(ty, self.span_since(start)))
+            }
             _ => Err(self.make_error("expected expression".into(), self.peek_token().span)),
         }
     }
@@ -645,6 +704,11 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) => {
                 self.advance();
                 Ok(Type::Struct(name))
+            }
+            TokenKind::Star => {
+                self.advance();
+                let inner = self.parse_base_type()?;
+                Ok(Type::Pointer(Box::new(inner)))
             }
             _ => Err(self.make_error("expected type".into(), self.peek_token().span)),
         }
