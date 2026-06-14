@@ -58,7 +58,6 @@ pub enum TokenKind {
 
     // Keywords
     Let,
-    Ref,
     Fn,
     Struct,
     Return,
@@ -168,10 +167,8 @@ impl fmt::Display for TokenKind {
             TokenKind::String(_) => write!(f, "string"),
             TokenKind::Ident(n) => write!(f, "identifier `{}`", n),
             TokenKind::Let => write!(f, "`let`"),
-            TokenKind::Ref => write!(f, "`ref`"),
-            TokenKind::Fn => write!(f, "`fn`"),
-            TokenKind::Struct => write!(f, "`struct`"),
-
+            TokenKind::Fn => write!(f, "`def`"),
+            TokenKind::Struct => write!(f, "`model`"),
             TokenKind::Return => write!(f, "`return`"),
             TokenKind::If => write!(f, "`if`"),
             TokenKind::Else => write!(f, "`else`"),

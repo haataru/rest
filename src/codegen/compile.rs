@@ -42,7 +42,10 @@ pub(crate) struct Codegen<'ctx> {
     free_fn: FunctionValue<'ctx>,
     strlen_fn: FunctionValue<'ctx>,
     memcpy_fn: FunctionValue<'ctx>,
-    strdup_fn: FunctionValue<'ctx>,
+    retain_fn: FunctionValue<'ctx>,
+    release_fn: FunctionValue<'ctx>,
+    rest_alloc_fn: FunctionValue<'ctx>,
+    rest_free_fn: FunctionValue<'ctx>,
     strcat_fn: FunctionValue<'ctx>,
     abort_fn: FunctionValue<'ctx>,
     functions: HashMap<String, FunctionValue<'ctx>>,
@@ -77,8 +80,12 @@ impl<'ctx> Codegen<'ctx> {
         );
         let memcpy_fn = module.add_function("llvm.memcpy.p0.p0.i64", memcpy_type, None);
 
-        let strdup_type = i8_ptr.fn_type(&[i8_ptr.into()], false);
-        let strdup_fn = module.add_function("__ref_strdup", strdup_type, None);
+        let retain_type = i8_ptr.fn_type(&[i8_ptr.into()], false);
+        let retain_fn = module.add_function("__rest_retain", retain_type, None);
+        let release_type = context.i32_type().fn_type(&[i8_ptr.into()], false);
+        let release_fn = module.add_function("__rest_release", release_type, None);
+        let rest_alloc_fn = module.add_function("__rest_alloc", malloc_type, None);
+        let rest_free_fn = module.add_function("__rest_free", free_type, None);
 
         let strcat_type = i8_ptr.fn_type(&[i8_ptr.into(), i8_ptr.into()], false);
         let strcat_fn = module.add_function("__ref_strcat", strcat_type, None);
@@ -108,7 +115,10 @@ impl<'ctx> Codegen<'ctx> {
             free_fn,
             strlen_fn,
             memcpy_fn,
-            strdup_fn,
+            retain_fn,
+            release_fn,
+            rest_alloc_fn,
+            rest_free_fn,
             strcat_fn,
             abort_fn,
             functions: HashMap::new(),
@@ -161,43 +171,83 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         let i64_ty = self.context.i64_type();
+        let i32_ptr = self.context.i32_type().ptr_type(inkwell::AddressSpace::default());
         let bool_ty = self.context.bool_type();
 
-        // __ref_strdup(ptr %s) -> ptr
-        let entry = self.context.append_basic_block(self.strdup_fn, "entry");
+        // __rest_alloc
+        let entry = self.context.append_basic_block(self.rest_alloc_fn, "entry");
         self.builder.position_at_end(entry);
-        let s = self.strdup_fn.get_nth_param(0)
-            .expect("__ref_strdup should have exactly 1 parameter");
+        let size = self.rest_alloc_fn.get_nth_param(0).unwrap().into_int_value();
+        let total_size = self.builder.build_int_add(size, i64_ty.const_int(4, false), "total_size")?;
+        let ptr = self.builder.build_call(self.malloc_fn, &[total_size.into()], "malloc")?.try_as_basic_value().basic().unwrap().into_pointer_value();
+        let rc_ptr = self.builder.build_pointer_cast(ptr, i32_ptr, "rc_ptr")?;
+        self.builder.build_store(rc_ptr, self.context.i32_type().const_int(1, false))?;
+        let data_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), ptr, &[i64_ty.const_int(4, false)], "data_ptr")? };
+        self.builder.build_return(Some(&data_ptr))?;
 
-        let len = self
-            .builder
-            .build_call(self.strlen_fn, &[s.into()], "len")?
-            .try_as_basic_value()
-            .basic()
-            .expect("strlen should return a basic int value")
-            .into_int_value();
-        let plus_one = self
-            .builder
-            .build_int_add(len, i64_ty.const_int(1, false), "plus_one")?;
-        let result = self
-            .builder
-            .build_call(self.malloc_fn, &[plus_one.into()], "result")?
-            .try_as_basic_value()
-            .basic()
-            .expect("malloc should return a basic pointer value")
-            .into_pointer_value();
-        self.builder.build_call(
-            self.memcpy_fn,
-            &[
-                result.into(),
-                s.into(),
-                plus_one.into(),
-                bool_ty.const_zero().into(),
-            ],
-            "",
+        // __rest_retain
+        let entry = self.context.append_basic_block(self.retain_fn, "entry");
+        self.builder.position_at_end(entry);
+        let s = self.retain_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let null_bb = self.context.append_basic_block(self.retain_fn, "null");
+        let not_null_bb = self.context.append_basic_block(self.retain_fn, "not_null");
+        let is_null = self.builder.build_is_null(s, "is_null")?;
+        self.builder.build_conditional_branch(is_null, null_bb, not_null_bb)?;
+        self.builder.position_at_end(null_bb);
+        self.builder.build_return(Some(&s))?;
+        self.builder.position_at_end(not_null_bb);
+        let rc_ptr_i8 = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s, &[i64_ty.const_int(0xFFFFFFFFFFFFFFFC, true)], "rc_ptr_i8")? };
+        let rc_ptr = self.builder.build_pointer_cast(rc_ptr_i8, i32_ptr, "rc_ptr")?;
+        self.builder.build_atomicrmw(
+            inkwell::AtomicRMWBinOp::Add,
+            rc_ptr,
+            self.context.i32_type().const_int(1, false),
+            inkwell::AtomicOrdering::SequentiallyConsistent
         )?;
-        let result_val: BasicValueEnum = result.into();
-        self.builder.build_return(Some(&result_val))?;
+        self.builder.build_return(Some(&s))?;
+
+        // __rest_release
+        let entry = self.context.append_basic_block(self.release_fn, "entry");
+        self.builder.position_at_end(entry);
+        let s = self.release_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let null_bb = self.context.append_basic_block(self.release_fn, "null");
+        let not_null_bb = self.context.append_basic_block(self.release_fn, "not_null");
+        let is_null = self.builder.build_is_null(s, "is_null")?;
+        self.builder.build_conditional_branch(is_null, null_bb, not_null_bb)?;
+        self.builder.position_at_end(null_bb);
+        self.builder.build_return(Some(&self.context.i32_type().const_zero()))?;
+        self.builder.position_at_end(not_null_bb);
+        let rc_ptr_i8 = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s, &[i64_ty.const_int(0xFFFFFFFFFFFFFFFC, true)], "rc_ptr_i8")? };
+        let rc_ptr = self.builder.build_pointer_cast(rc_ptr_i8, i32_ptr, "rc_ptr")?;
+        let old_rc = self.builder.build_atomicrmw(
+            inkwell::AtomicRMWBinOp::Sub,
+            rc_ptr,
+            self.context.i32_type().const_int(1, false),
+            inkwell::AtomicOrdering::SequentiallyConsistent
+        )?;
+        let is_one = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            old_rc,
+            self.context.i32_type().const_int(1, false),
+            "is_one"
+        )?;
+        let i32_is_one = self.builder.build_int_z_extend(is_one, self.context.i32_type(), "i32_is_one")?;
+        self.builder.build_return(Some(&i32_is_one))?;
+
+        // __rest_free
+        let entry = self.context.append_basic_block(self.rest_free_fn, "entry");
+        self.builder.position_at_end(entry);
+        let s = self.rest_free_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let null_bb = self.context.append_basic_block(self.rest_free_fn, "null");
+        let not_null_bb = self.context.append_basic_block(self.rest_free_fn, "not_null");
+        let is_null = self.builder.build_is_null(s, "is_null")?;
+        self.builder.build_conditional_branch(is_null, null_bb, not_null_bb)?;
+        self.builder.position_at_end(null_bb);
+        self.builder.build_return(None)?;
+        self.builder.position_at_end(not_null_bb);
+        let real_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s, &[i64_ty.const_int(0xFFFFFFFFFFFFFFFC, true)], "real_ptr")? };
+        self.builder.build_call(self.free_fn, &[real_ptr.into()], "free")?;
+        self.builder.build_return(None)?;
 
         // __ref_strcat(ptr %a, ptr %b) -> ptr
         let entry = self.context.append_basic_block(self.strcat_fn, "entry");
@@ -229,7 +279,7 @@ impl<'ctx> Codegen<'ctx> {
             .build_int_add(total, i64_ty.const_int(1, false), "plus_one")?;
         let result = self
             .builder
-            .build_call(self.malloc_fn, &[plus_one.into()], "result")?
+            .build_call(self.rest_alloc_fn, &[plus_one.into()], "result")?
             .try_as_basic_value()
             .basic()
             .expect("malloc should return a basic pointer value")
@@ -267,6 +317,7 @@ impl<'ctx> Codegen<'ctx> {
         let result_val: BasicValueEnum = result.into();
         self.builder.build_return(Some(&result_val))?;
 
+        
         self.runtime_compiled = true;
         Ok(())
     }
@@ -296,12 +347,32 @@ impl<'ctx> Codegen<'ctx> {
                                         let field_ptr = field_val.into_pointer_value();
                                         self.free_struct_ptr(field_ptr, inner_name, struct_field_types);
                                     } else {
-                                        let _ = self.builder.build_call(self.free_fn, &[field_val.into()], "free_field");
+                                        {
+        let do_free = self.builder.build_call(self.release_fn, &[field_val.into()], "release_free_field").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_field_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_field");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[field_val.into()], "free_field");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
                                     }
                                 }
             }
         }
-        let _ = self.builder.build_call(self.free_fn, &[ptr.into()], "free_struct");
+        {
+        let do_free = self.builder.build_call(self.release_fn, &[ptr.into()], "release_free_struct").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_struct_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_struct");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[ptr.into()], "free_struct");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
     }
 
     fn free_owner_struct(
@@ -335,20 +406,50 @@ impl<'ctx> Codegen<'ctx> {
             let Some(gep) = gep else { continue };
             if matches!(elem_type, Type::String) {
                 if let Ok(elem) = self.builder.build_load(self.ptr_ty(), gep, "array_elem_val") {
-                    let _ = self.builder.build_call(self.free_fn, &[elem.into()], "free_array_elem");
+                    {
+        let do_free = self.builder.build_call(self.release_fn, &[elem.into()], "release_free_array_elem").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_array_elem_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_array_elem");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[elem.into()], "free_array_elem");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
                 }
             } else if let Type::Struct(sname) = elem_type
                 && let Ok(struct_ptr) = self.builder.build_load(self.ptr_ty(), gep, "array_struct_elem") {
                     self.free_struct_ptr(struct_ptr.into_pointer_value(), sname, struct_field_types);
                 }
         }
-        let _ = self.builder.build_call(self.free_fn, &[arr_ptr.into()], "free_array");
+        {
+        let do_free = self.builder.build_call(self.release_fn, &[arr_ptr.into()], "release_free_array").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_array_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_array");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[arr_ptr.into()], "free_array");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
     }
 
     fn free_owner_string(&mut self, owner_name: &str) {
         if let Some(&(ptr_alloca, _)) = self.lookup_value(owner_name)
             && let Ok(loaded) = self.builder.build_load(self.ptr_ty(), ptr_alloca, owner_name) {
-                let _ = self.builder.build_call(self.free_fn, &[loaded.into()], "free_string");
+                {
+        let do_free = self.builder.build_call(self.release_fn, &[loaded.into()], "release_free_string").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_string_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_string");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[loaded.into()], "free_string");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
             }
     }
 
@@ -680,7 +781,17 @@ impl<'ctx> Codegen<'ctx> {
                 let result = self.compile_expr(expr, struct_field_types)?;
                 if matches!(expr, HirExpr::AllocStruct(..) | HirExpr::ArrayLiteral(..) | HirExpr::Binary { .. } | HirExpr::Call(..))
                     && result.is_pointer_value() {
-                        let _ = self.builder.build_call(self.free_fn, &[result.into()], "free_expr_tmp");
+                        {
+        let do_free = self.builder.build_call(self.release_fn, &[result.into()], "release_free_expr_tmp").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_expr_tmp_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_expr_tmp");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[result.into()], "free_expr_tmp");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
                     }
                 Ok(())
             }
@@ -724,11 +835,11 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 let val = self.compile_expr(v, struct_field_types)?;
                 // String literals produce global constants; the caller expects an owned heap
-                // pointer, so strdup before returning.
+                // pointer, so retain before returning.
                 let ret_val = match v {
                     HirExpr::String(_, _) => {
-                        self.builder.build_call(self.strdup_fn, &[val.into()], "ret_strdup")?
-                            .try_as_basic_value().basic().expect("__ref_strdup should return a basic value")
+                        self.builder.build_call(self.retain_fn, &[val.into()], "ret_retain")?
+                            .try_as_basic_value().basic().expect("__rest_retain should return a basic value")
                     }
                     HirExpr::FieldLoad { struct_name, index, .. } => {
                         if let Some(fields) = struct_field_types.get(struct_name)
@@ -736,8 +847,8 @@ impl<'ctx> Codegen<'ctx> {
                         {
                             if *field_type == Type::String {
                                 // Strdup string field before parent struct is freed
-                                self.builder.build_call(self.strdup_fn, &[val.into()], "ret_field_strdup")?
-                                    .try_as_basic_value().basic().expect("__ref_strdup should return a basic value")
+                                self.builder.build_call(self.retain_fn, &[val.into()], "ret_field_retain")?
+                                    .try_as_basic_value().basic().expect("__rest_retain should return a basic value")
                             } else if matches!(field_type, Type::Struct(_)) {
                                 // Deep-copy struct field before parent is freed
                                 self.deep_copy_loaded(val, field_type, struct_field_types)?
@@ -784,7 +895,7 @@ impl<'ctx> Codegen<'ctx> {
         let is_struct = matches!(ty, Type::Struct(_));
 
         let is_array_lit = matches!(init, HirExpr::ArrayLiteral(..));
-        if owner && !matches!(init, HirExpr::Ident { .. } | HirExpr::Borrow(..)) {
+        if owner && !matches!(init, HirExpr::Ident { .. }) {
             // owner is set only for Struct types in the Lowerer. If a
             // future change sets owner=true for a non-Struct type, we
             // skip the owner-tracking push rather than bailing out —
@@ -799,13 +910,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
-        if let HirExpr::Borrow(inner, _) = init {
-            let alloca = self.builder.build_alloca(i8_ptr, name)?;
-            let ref_val = self.compile_ref(inner, struct_field_types)?;
-            self.builder.build_store(alloca, ref_val)?;
-            self.insert_value(name.to_string(), (alloca, i8_ptr.into()));
-            return Ok(());
-        }
+        
 
         let is_heap_alloc = is_struct || is_array_lit;
         let load_ty: BasicTypeEnum = if is_heap_alloc {
@@ -832,8 +937,8 @@ impl<'ctx> Codegen<'ctx> {
                     let src_is_owner = self.is_owner(src_name);
                     let loaded = self.builder.build_load(load_ty, src_alloca, src_name)?;
                     if is_string && src_is_owner {
-                        let dup = self.builder.build_call(self.strdup_fn, &[loaded.into()], "let_strdup")?;
-                        let dup_val = dup.try_as_basic_value().basic().expect("__ref_strdup should return a basic value");
+                        let dup = self.builder.build_call(self.retain_fn, &[loaded.into()], "let_retain")?;
+                        let dup_val = dup.try_as_basic_value().basic().expect("__rest_retain should return a basic value");
                         self.builder.build_store(alloca, dup_val)?;
                     } else if is_struct && src_is_owner {
                         self.builder.build_store(alloca, loaded)?;
@@ -847,17 +952,15 @@ impl<'ctx> Codegen<'ctx> {
             }
             HirExpr::String(s, _) => {
                 let val = self.compile_string_literal(s);
-                let dup = self.builder.build_call(self.strdup_fn, &[val.into()], "let_strdup")?;
-                let dup_val = dup.try_as_basic_value().basic().expect("__ref_strdup should return a basic value");
-                self.builder.build_store(alloca, dup_val)?;
+                self.builder.build_store(alloca, val)?;
             }
             _ => {
                 let val = self.compile_expr(init, struct_field_types)?;
                 let val = if is_string {
-                    // Field loads extract owned data (string pointer) from parent → strdup
+                    // Field loads extract owned data (string pointer) from parent → retain
                     // to prevent double-free when both parent and let-binding are freed.
-                    let dup = self.builder.build_call(self.strdup_fn, &[val.into()], "let_strdup")?;
-                    dup.try_as_basic_value().basic().expect("__ref_strdup should return a basic value")
+                    let dup = self.builder.build_call(self.retain_fn, &[val.into()], "let_retain")?;
+                    dup.try_as_basic_value().basic().expect("__rest_retain should return a basic value")
                 } else if let Type::Struct(_) = ty {
                     // Struct values from field loads must be deep-copied
                     self.deep_copy_loaded(val, ty, struct_field_types)?
@@ -1087,7 +1190,6 @@ impl<'ctx> Codegen<'ctx> {
             HirExpr::Bool(v, _) => Ok(self.context.bool_type().const_int(if *v { 1 } else { 0 }, false).into()),
             HirExpr::String(s, _) => Ok(self.compile_string_literal(s)),
             HirExpr::Ident { name, .. } => self.compile_ident(name),
-            HirExpr::Borrow(inner, _) => self.compile_ref(inner, struct_field_types),
             HirExpr::AllocStruct(struct_name, fields, _) => {
                 self.compile_alloc_struct(struct_name, fields, struct_field_types)
             }
@@ -1144,11 +1246,11 @@ impl<'ctx> Codegen<'ctx> {
         };
         let result = self
             .builder
-            .build_call(self.strdup_fn, &[ptr_val.into()], "strdup")?
+            .build_call(self.retain_fn, &[ptr_val.into()], "retain")?
             .try_as_basic_value();
         let bv = result
             .basic()
-            .expect("__ref_strdup should return a basic value");
+            .expect("__rest_retain should return a basic value");
         Ok(Some(bv))
     }
 
@@ -1162,10 +1264,10 @@ impl<'ctx> Codegen<'ctx> {
             Type::String => {
                 let result = self
                     .builder
-                    .build_call(self.strdup_fn, &[val.into()], "arr_strdup")?
+                    .build_call(self.retain_fn, &[val.into()], "arr_retain")?
                     .try_as_basic_value()
                     .basic()
-                    .expect("__ref_strdup should return a basic value");
+                    .expect("__rest_retain should return a basic value");
                 Ok(result)
             }
             Type::Struct(struct_name) => {
@@ -1174,7 +1276,7 @@ impl<'ctx> Codegen<'ctx> {
                 let size = struct_ty.size_of()
                     .unwrap_or_else(|| self.context.i64_type().const_int(8, false));
                 let malloc_args = &[size.into()];
-                let heap_ptr = self.builder.build_call(self.malloc_fn, malloc_args, "struct_copy_malloc")?
+                let heap_ptr = self.builder.build_call(self.rest_alloc_fn, malloc_args, "struct_copy_malloc")?
                     .try_as_basic_value()
                     .basic()
                     .expect("malloc returns basic value");
@@ -1196,8 +1298,8 @@ impl<'ctx> Codegen<'ctx> {
                             && let Ok(field_val) = self.builder.build_load(self.ptr_ty(), gep, "copy_field_val")
                         {
                             if matches!(ty, Type::String) {
-                                let dup = self.builder.build_call(self.strdup_fn, &[field_val.into()], "copy_field_strdup")?
-                                    .try_as_basic_value().basic().expect("__ref_strdup should return a basic value");
+                                let dup = self.builder.build_call(self.retain_fn, &[field_val.into()], "copy_field_retain")?
+                                    .try_as_basic_value().basic().expect("__rest_retain should return a basic value");
                                 self.builder.build_store(gep, dup)?;
                             } else if let Type::Struct(..) = ty {
                                 let inner_copy = self.deep_copy_loaded(field_val, ty, struct_field_types)?;
@@ -1221,7 +1323,15 @@ impl<'ctx> Codegen<'ctx> {
             .builder
             .build_pointer_cast(ptr, i8_ptr_ty, "str_cast")
             .expect("build_pointer_cast to i8* failed");
-        casted.into()
+
+        let len = self.context.i64_type().const_int(s.len() as u64, false);
+        let plus_one = self.builder.build_int_add(len, self.context.i64_type().const_int(1, false), "plus_one").unwrap();
+        let alloc_ptr = self.builder.build_call(self.rest_alloc_fn, &[plus_one.into()], "alloc_str")
+            .unwrap().try_as_basic_value().basic().unwrap().into_pointer_value();
+
+        self.builder.build_call(self.memcpy_fn, &[alloc_ptr.into(), casted.into(), plus_one.into(), self.context.bool_type().const_zero().into()], "memcpy").unwrap();
+
+        alloc_ptr.into()
     }
 
     fn compile_ident(
@@ -1288,7 +1398,7 @@ impl<'ctx> Codegen<'ctx> {
         let malloc_args = &[size_val.into()];
         let heap_ptr = self
             .builder
-            .build_call(self.malloc_fn, malloc_args, "malloc")?
+            .build_call(self.rest_alloc_fn, malloc_args, "malloc")?
             .try_as_basic_value()
             .basic()
             .expect("malloc should return a basic pointer value");
@@ -1347,7 +1457,7 @@ impl<'ctx> Codegen<'ctx> {
         let malloc_args = &[total_size.into()];
         let heap_ptr = self
             .builder
-            .build_call(self.malloc_fn, malloc_args, "array_malloc")?
+            .build_call(self.rest_alloc_fn, malloc_args, "array_malloc")?
             .try_as_basic_value()
             .basic()
             .expect("malloc should return a basic pointer value")
@@ -1504,7 +1614,17 @@ impl<'ctx> Codegen<'ctx> {
         let call_site = self.builder.build_call(fn_val, &llvm_args, callee)?;
         // C2: free temporary AllocStruct/ArrayLiteral args after call
         for val in temp_allocs {
-            let _ = self.builder.build_call(self.free_fn, &[val.into()], "free_temp_arg");
+            {
+        let do_free = self.builder.build_call(self.release_fn, &[val.into()], "release_free_temp_arg").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_temp_arg_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_temp_arg");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[val.into()], "free_temp_arg");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
         }
         let ret = call_site
             .try_as_basic_value()
@@ -1946,8 +2066,8 @@ impl<'ctx> Codegen<'ctx> {
                                             self.owner_scope_mut().push(Owner::Array(name.to_string(), elem_ty.clone(), *count));
                                         }
                                         Owner::String(_) => {
-                                            let dup = self.builder.build_call(self.strdup_fn, &[val.into()], "assign_strdup")?;
-                                            let dup_val = dup.try_as_basic_value().basic().expect("__ref_strdup should return a basic value");
+                                            let dup = self.builder.build_call(self.retain_fn, &[val.into()], "assign_retain")?;
+                                            let dup_val = dup.try_as_basic_value().basic().expect("__rest_retain should return a basic value");
                                             self.builder.build_store(alloca, dup_val)?;
                                             self.owner_scope_mut().push(Owner::String(name.to_string()));
                                         }
@@ -1983,7 +2103,17 @@ impl<'ctx> Codegen<'ctx> {
                     && let Some((_, field_type)) = fields.get(*index) {
                         if matches!(field_type, Type::String) {
                             if let Ok(old) = self.builder.build_load(self.ptr_ty(), gep, "old_field") {
-                                let _ = self.builder.build_call(self.free_fn, &[old.into()], "free_old_field");
+                                {
+        let do_free = self.builder.build_call(self.release_fn, &[old.into()], "release_free_old_field").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_old_field_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_old_field");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[old.into()], "free_old_field");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    }
                             }
                         } else if let Type::Struct(inner_name) = field_type
                             && let Ok(old) = self.builder.build_load(self.ptr_ty(), gep, "old_field") {
@@ -1997,9 +2127,9 @@ impl<'ctx> Codegen<'ctx> {
                             // Call returns owned string, strcat returns new allocation → take ownership directly
                             self.builder.build_store(gep, val)?;
                         } else {
-                            // Pointer to an existing allocation → strdup to prevent double-free
-                            let dup = self.builder.build_call(self.strdup_fn, &[val.into()], "field_strdup")?;
-                            let dup_val = dup.try_as_basic_value().basic().expect("__ref_strdup should return a basic value");
+                            // Pointer to an existing allocation → retain to prevent double-free
+                            let dup = self.builder.build_call(self.retain_fn, &[val.into()], "field_retain")?;
+                            let dup_val = dup.try_as_basic_value().basic().expect("__rest_retain should return a basic value");
                             self.builder.build_store(gep, dup_val)?;
                         }
                     } else if let Type::Struct(_) = field_type {
@@ -2075,7 +2205,17 @@ impl<'ctx> Codegen<'ctx> {
                                             if let Type::Struct(sname) = elem_type {
                                                 self.free_struct_ptr(old.into_pointer_value(), sname, struct_field_types);
                                             } else {
-                                                self.builder.build_call(self.free_fn, &[old.into()], "free_old_elem")?;
+                                                {
+        let do_free = self.builder.build_call(self.release_fn, &[old.into()], "release_free_old_elem").unwrap().try_as_basic_value().basic().unwrap().into_int_value();
+        let do_free_bool = self.builder.build_int_compare(inkwell::IntPredicate::NE, do_free, self.context.i32_type().const_zero(), "do_free_bool").unwrap();
+        let then_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "free_free_old_elem_block");
+        let merge_bb = self.context.append_basic_block(self.builder.get_insert_block().unwrap().get_parent().unwrap(), "merge_free_free_old_elem");
+        self.builder.build_conditional_branch(do_free_bool, then_bb, merge_bb).unwrap();
+        self.builder.position_at_end(then_bb);
+        let _ = self.builder.build_call(self.rest_free_fn, &[old.into()], "free_old_elem");
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+    };
                                             }
                                         }
                                 let val = self.compile_expr(rhs, struct_field_types)?;
@@ -2089,13 +2229,13 @@ impl<'ctx> Codegen<'ctx> {
                                         // constant.
                                         // Exception: call/strcat results are already
                                         // freshly malloced by the callee, so take them
-                                        // directly to avoid an extra strdup round-trip.
+                                        // directly to avoid an extra retain round-trip.
                                         if matches!(rhs, HirExpr::Call(..) | HirExpr::Binary { op: BinOp::Add, .. }) {
                                             self.builder.build_store(gep, val)?;
                                         } else {
-                                            let dup = self.builder.build_call(self.strdup_fn, &[val.into()], "array_elem_strdup")?;
+                                            let dup = self.builder.build_call(self.retain_fn, &[val.into()], "array_elem_retain")?;
                                             let dup_val = dup.try_as_basic_value().basic()
-                                                .expect("__ref_strdup should return a basic value");
+                                                .expect("__rest_retain should return a basic value");
                                             self.builder.build_store(gep, dup_val)?;
                                         }
                                     } else {

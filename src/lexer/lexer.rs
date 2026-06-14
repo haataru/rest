@@ -322,9 +322,8 @@ impl<'a> Lexer<'a> {
         let end = self.pos;
         let kind = match raw.as_str() {
             "let" => TokenKind::Let,
-            "ref" => TokenKind::Ref,
-            "fn" => TokenKind::Fn,
-            "struct" => TokenKind::Struct,
+            "def" => TokenKind::Fn,
+            "model" => TokenKind::Struct,
 
             "return" => TokenKind::Return,
             "if" => TokenKind::If,

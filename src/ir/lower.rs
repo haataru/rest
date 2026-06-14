@@ -171,7 +171,7 @@ impl Lowerer {
                     span: *span,
                 })
             }
-            Expr::Ref(inner, span) => Ok(HirExpr::Borrow(Box::new(self.lower_expr(inner)?), *span)),
+
             Expr::Struct(name, fields, span) => {
                 let ordered_fields: Vec<(String, Expr)> =
                     match self.ctx.struct_types.get(name) {

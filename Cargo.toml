@@ -1,13 +1,9 @@
 [package]
-name = "ref"
+name = "restc"
 version = "0.1.0"
 edition = "2024"
-description = "Minimal systems language with manual RAII and LLVM codegen"
+description = "Rest backend language compiler based on ref"
 license = "MIT"
-repository = "https://github.com/haataru/ref"
-keywords = ["language", "compiler", "llvm", "raii"]
-categories = ["compilers", "development-tools"]
-
 [dependencies]
 inkwell = { version = "0.9", features = ["llvm18-1"] }
 clap = { version = "4", features = ["derive"] }

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use inkwell::OptimizationLevel;
 
-use r#ref::driver;
+use restc::driver;
 
 fn opt_level(s: &str) -> Result<OptimizationLevel> {
     match s {
@@ -117,8 +117,8 @@ or generate .ll and link manually:
 }
 
 fn read_source(input: &Path) -> Result<String> {
-    if input.extension().is_none_or(|e| e != "rf") {
-        anyhow::bail!("input file must have .rf extension");
+    if input.extension().is_none_or(|e| e != "rest") {
+        anyhow::bail!("input file must have .rest extension");
     }
     if !input.exists() {
         anyhow::bail!("input file not found: {}", input.display());

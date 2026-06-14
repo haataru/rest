@@ -1,0 +1,6 @@
+model Point { x: i32, y: i32 }
+
+def main() {
+    let p = Point { x: 10, y: 20 };
+    print(p.x + p.y);
+}

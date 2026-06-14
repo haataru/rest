@@ -7,7 +7,7 @@ use crate::codegen;
 use crate::ir::Lowerer;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
-use crate::sema::{BorrowChecker, TypeChecker};
+use crate::sema::TypeChecker;
 
 pub fn run(source: &str, output: &Path, opt_level: OptimizationLevel) -> Result<()> {
     let mut lexer = Lexer::new(source);
@@ -20,7 +20,5 @@ pub fn run(source: &str, output: &Path, opt_level: OptimizationLevel) -> Result<
     let mut lowerer = Lowerer::new(ctx);
     let hir = lowerer.lower(&stmts)?;
     let struct_field_types = lowerer.struct_types().clone();
-    let mut borrowck = BorrowChecker::new();
-    borrowck.check(&hir)?;
     codegen::generate(output, &hir, struct_field_types, opt_level)
 }

@@ -295,12 +295,6 @@ impl<'a> Parser<'a> {
                 let sub = Expr::Binary(Box::new(expr.clone()), BinOp::Sub, Box::new(one), span);
                 Ok(Expr::Assign(Box::new(expr), Box::new(sub), span))
             }
-            TokenKind::Amp => {
-                let span = self.peek_token().span;
-                self.advance();
-                let expr = self.parse_unary()?;
-                Ok(Expr::Ref(Box::new(expr), span))
-            }
             _ => self.parse_postfix(),
         }
     }
@@ -418,12 +412,7 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Expr::Bool(false, span))
             }
-            TokenKind::Ref => {
-                let span = self.peek_token().span;
-                self.advance();
-                let expr = self.parse_unary()?;
-                Ok(Expr::Ref(Box::new(expr), span))
-            }
+
             TokenKind::Ident(name) => {
                 let span = self.peek_token().span;
                 self.advance();

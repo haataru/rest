@@ -30,7 +30,7 @@ pub enum Expr {
     FieldAccess(Box<Expr>, String, Span),
     ArrayIndex(Box<Expr>, Box<Expr>, Span),
     ArrayLiteral(Box<Type>, Vec<Expr>, Span),
-    Ref(Box<Expr>, Span),
+
     Unary(UnOp, Box<Expr>, Span),
     Binary(Box<Expr>, BinOp, Box<Expr>, Span),
     Assign(Box<Expr>, Box<Expr>, Span),
@@ -50,7 +50,7 @@ impl Expr {
             Expr::FieldAccess(_, _, span) => *span,
             Expr::ArrayIndex(_, _, span) => *span,
             Expr::ArrayLiteral(_, _, span) => *span,
-            Expr::Ref(_, span) => *span,
+
             Expr::Unary(_, _, span) => *span,
             Expr::Binary(_, _, _, span) => *span,
             Expr::Assign(_, _, span) => *span,

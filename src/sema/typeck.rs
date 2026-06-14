@@ -67,9 +67,7 @@ pub enum TypeckError {
         name: String,
         span: Span,
     },
-    AssignToRef {
-        span: Span,
-    },
+
     VoidVariable {
         name: String,
         span: Span,
@@ -203,9 +201,7 @@ impl std::fmt::Display for TypeckError {
             TypeckError::NotAFunction { name, span } => {
                 write!(f, "type error at {}:{}: `{}` is not a function", span.line, span.col, name)
             }
-            TypeckError::AssignToRef { span } => {
-                write!(f, "type error at {}:{}: cannot assign to a reference", span.line, span.col)
-            }
+
             TypeckError::VoidVariable { name, span } => {
                 write!(f, "type error at {}:{}: variable `{}` cannot have type `void`", span.line, span.col, name)
             }
@@ -639,9 +635,7 @@ impl TypeChecker {
             Expr::Ident(name, span) => self
                 .lookup(name)
                 .ok_or_else(|| TypeckError::UndefinedVariable(name.clone(), *span)),
-            Expr::Ref(inner, _) => {
-                self.infer_expr(inner)
-            }
+
             Expr::Struct(name, fields, span) => {
                 let mut seen = HashSet::new();
                 for (field, _) in fields {
@@ -895,7 +889,7 @@ impl TypeChecker {
             }
             Expr::Assign(lhs, rhs, span) => {
                 match lhs.as_ref() {
-                    Expr::Ref(_, _) => return Err(TypeckError::AssignToRef { span: *span }),
+
                     Expr::FieldAccess(obj, _, _) if !matches!(obj.as_ref(), Expr::Ident(..)) => {
                         return Err(TypeckError::Unassignable { span: *span })
                     }

@@ -60,7 +60,7 @@ pub enum HirExpr {
     /// (string, struct, array) when deciding whether a `let y = x;`
     /// actually moves `x`.
     Ident { name: String, ty: Type, span: Span },
-    Borrow(Box<HirExpr>, Span),
+
     AllocStruct(String, Vec<(String, HirExpr)>, Span),
     Call(String, Vec<HirExpr>, Span),
     FieldLoad {
@@ -99,7 +99,7 @@ impl HirExpr {
             HirExpr::String(_, s) => *s,
             HirExpr::Bool(_, s) => *s,
             HirExpr::Ident { span, .. } => *span,
-            HirExpr::Borrow(_, s) => *s,
+
             HirExpr::AllocStruct(_, _, s) => *s,
             HirExpr::Call(_, _, s) => *s,
             HirExpr::FieldLoad { span, .. } => *span,
