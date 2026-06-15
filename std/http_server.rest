@@ -1,0 +1,94 @@
+import "scheduler";
+import "net";
+import "http";
+
+extern "C" def malloc(size: i64) -> *u8;
+extern "C" def free(ptr: *u8);
+extern "C" def printf(fmt: *u8, ...) -> i32;
+
+def fiber_router(sched: *Scheduler, func_id: i32, arg: i64) {
+    if func_id == 1 {
+        server_loop(sched, arg as i32);
+    }
+    if func_id == 2 {
+        client_loop(sched, arg as i32);
+    }
+}
+
+extern "C" def fflush(stream: *u8) -> i32;
+
+def server_loop(sched: *Scheduler, port: i32) {
+    let server_fd: i32 = tcp_listen(port);
+    if server_fd < 0 {
+        printf("Failed to listen on port %d, error: %d\n" as *u8, port, server_fd);
+        fflush(0 as *u8);
+        return;
+    }
+    
+    printf("🚀 Rest Green Threads Server listening on port %d\n" as *u8, port);
+    fflush(0 as *u8);
+    
+    // Register server_fd in epoll for this fiber
+    let ev: EpollEvent = EpollEvent { events: 0, data_fd: 0, data_pad: 0 };
+    ev.events = EPOLLIN;
+    ev.data_fd = (*sched).current_fiber;
+    ev.data_pad = 0;
+    epoll_ctl((*sched).epoll_fd, 1, server_fd, ev); // ADD
+
+    while true {
+        let client_fd: i32 = tcp_accept(sched, server_fd);
+        if client_fd >= 0 {
+            spawn(sched, 2, client_fd as i64);
+        }
+    }
+}
+
+def client_loop(sched: *Scheduler, fd: i32) {
+    // We register the client fd
+    let ev: EpollEvent = EpollEvent { events: 0, data_fd: 0, data_pad: 0 };
+    ev.events = EPOLLIN;
+    ev.data_fd = (*sched).current_fiber;
+    ev.data_pad = 0;
+    epoll_ctl((*sched).epoll_fd, 1, fd, ev); // ADD
+
+    let buf: *u8 = malloc(8192i64);
+    
+    // Read request
+    let bytes: i32 = tcp_read(sched, fd, buf, 8192);
+    if bytes > 0 {
+        let req: *HttpRequest = malloc(48i64) as *HttpRequest;
+        (*req).headers = malloc(32i64 * 32i64) as *HttpHeader; // Max 32 headers
+        (*req).max_headers = 32;
+        
+        let parsed: i32 = parse_http_request(buf, bytes, req);
+        if parsed > 0 {
+            // Write simple response
+            let body = "{\"status\": \"ok\", \"message\": \"Hello from Green Threads!\"}";
+            let body_len = 54;
+            
+            // Format HTTP response manually
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 56\r\n\r\n{\"status\": \"ok\", \"message\": \"Hello from Green Threads!\"}";
+            let resp_len = 119;
+            
+            // Register for writing
+            ev.events = EPOLLOUT;
+            epoll_ctl((*sched).epoll_fd, 3, fd, ev); // MOD to OUT
+            
+            tcp_write(sched, fd, response as *u8, resp_len);
+        }
+        
+        free((*req).headers as *u8);
+        free(req as *u8);
+    }
+    
+    free(buf);
+    close(fd);
+}
+
+def start_server(port: i32) {
+    let sched: *Scheduler = create_scheduler();
+    // Spawn server fiber (ID 1)
+    spawn(sched, 1, port as i64);
+    // Run scheduler indefinitely
+    scheduler_run(sched);
+}

@@ -1,0 +1,21 @@
+create_scheduler: mmap 1
+
+create_scheduler: epoll_create1
+
+create_scheduler: mmap 2
+
+create_scheduler: done
+
+scheduler: swapping to fiber
+
+🚀 Rest Green Threads Server listening on port 8080
+scheduler: returned from fiber
+
+scheduler: swapping to fiber
+
+scheduler: returned from fiber
+
+scheduler: swapping to fiber
+
+scheduler: returned from fiber
+

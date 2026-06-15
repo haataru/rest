@@ -1,7 +1,7 @@
 // Green Threads Scheduler for Rest
-
+import "context";
 extern "C" def epoll_create1(flags: i32) -> i32;
-extern "C" def epoll_ctl(epfd: i32, op: i32, fd: i32, event: *EpollEvent) -> i32;
+extern "C" def epoll_ctl(epfd: i32, op: i32, fd: i32, event: EpollEvent) -> i32;
 extern "C" def epoll_wait(epfd: i32, events: *EpollEvent, maxevents: i32, timeout: i32) -> i32;
 
 extern "C" def mmap(addr: *u8, length: i64, prot: i32, flags: i32, fd: i32, offset: i64) -> *u8;
@@ -61,8 +61,8 @@ def create_scheduler() -> *Scheduler {
 
 
 // Entry point called by assembly
-def fiber_entry(sched: *Scheduler, func_id: i32) {
-    fiber_router(sched, func_id);
+def fiber_entry(sched: *Scheduler, func_id: i32, arg: i64) {
+    fiber_router(sched, func_id, arg);
 }
 
 // Helper to get a pointer to the i-th Fiber
@@ -87,7 +87,7 @@ def fiber_exit(sched: *Scheduler) {
     __rest_swapcontext(&(*fiber).stack_ptr, (*sched).main_stack_ptr);
 }
 
-def spawn(sched: *Scheduler, func_id: i32) {
+def spawn(sched: *Scheduler, func_id: i32, arg: i64) {
     let f_idx: i32 = (*sched).num_fibers;
     (*sched).num_fibers = f_idx + 1;
     
@@ -102,7 +102,7 @@ def spawn(sched: *Scheduler, func_id: i32) {
     let ctx: *FiberContext = sp as *FiberContext;
 
     (*ctx).r15 = 0i64;
-    (*ctx).r14 = 0i64;
+    (*ctx).r14 = arg; // Use r14 for the custom argument
     (*ctx).r13 = func_id as i64;
     (*ctx).r12 = sched as i64;
     (*ctx).rbx = 0i64;
@@ -120,6 +120,27 @@ def spawn(sched: *Scheduler, func_id: i32) {
 def fiber_yield(sched: *Scheduler) {
     let current: i32 = (*sched).current_fiber;
     if current != -1 {
+        let fiber: *Fiber = get_fiber(sched, current);
+        (*fiber).state = 1; // Blocked
+        __rest_swapcontext(&(*fiber).stack_ptr, (*sched).main_stack_ptr);
+    }
+}
+
+// Register an fd with epoll and yield
+def fiber_yield_for_fd(sched: *Scheduler, fd: i32, events: i32) {
+    let current: i32 = (*sched).current_fiber;
+    if current != -1 {
+        let ev: EpollEvent = EpollEvent { events: 0, data_fd: 0, data_pad: 0 };
+        ev.events = events;
+        ev.data_fd = current; // We store the fiber ID here!
+        ev.data_pad = 0;
+        
+        // EPOLL_CTL_MOD = 3, EPOLL_CTL_ADD = 1
+        let res: i32 = epoll_ctl((*sched).epoll_fd, 3, fd, ev);
+        if res != 0 {
+            epoll_ctl((*sched).epoll_fd, 1, fd, ev);
+        }
+        
         let fiber: *Fiber = get_fiber(sched, current);
         (*fiber).state = 1; // Blocked
         __rest_swapcontext(&(*fiber).stack_ptr, (*sched).main_stack_ptr);
@@ -164,11 +185,10 @@ def scheduler_run(sched: *Scheduler) {
             let offset: i64 = (j as i64) * 12i64;
             let ev: *EpollEvent = ((events_buf as i64) + offset) as *EpollEvent;
             
-            let fd: i32 = (*ev).data_fd;
-            // The fd typically maps to a connection. The connection struct should store the fiber_id.
-            // For now, we assume fd = fiber_id for testing, or we look it up.
-            // Let's assume the user handles lookup. The user provides a callback or we wake it up.
-            // For now, just print.
+            let fiber_id: i32 = (*ev).data_fd;
+            let blocked_fiber: *Fiber = get_fiber(sched, fiber_id);
+            (*blocked_fiber).state = 0; // Ready!
+            
             j = j + 1;
         }
     }

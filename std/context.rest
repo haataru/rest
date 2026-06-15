@@ -27,6 +27,7 @@ __rest_fiber_entry:
     sub $8, %rsp
     movq %r12, %rdi
     movq %r13, %rsi
+    movq %r14, %rdx
     call fiber_router
     movq %r12, %rdi
     call fiber_exit

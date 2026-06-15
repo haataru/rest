@@ -53,6 +53,13 @@ fn load_module(
             if resolved_path.extension().is_none() {
                 resolved_path.set_extension("rest");
             }
+            if !resolved_path.exists() {
+                // Try std directory relative to current working dir
+                let std_path = Path::new("std").join(import_path).with_extension("rest");
+                if std_path.exists() {
+                    resolved_path = std_path;
+                }
+            }
             let abs_path = std::fs::canonicalize(&resolved_path)
                 .unwrap_or_else(|_| resolved_path.clone());
             load_module(&abs_path, all_stmts, visited)?;
