@@ -93,6 +93,10 @@ impl<'ctx> Codegen<'ctx> {
                 body,
                 ..
             } => self.compile_for(var, var_ty, lo, hi, body, struct_field_types),
+            HirStmt::Const { .. } => {
+                // Already handled in first pass
+                Ok(())
+            }
             HirStmt::Break(_) => {
                 let &(_, break_bb, owner_depth) =
                     self.loop_stack.last().context("break outside loop")?;

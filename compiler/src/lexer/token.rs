@@ -73,6 +73,8 @@ pub enum TokenKind {
     Extern,
     SizeOf,
     As,
+    Import,
+    Const,
 
     // Type keywords
     I8,
@@ -126,6 +128,7 @@ pub enum TokenKind {
     LtLt,
     GtGt,   // << >>
     DotDot, // ..
+    DotDotDot, // ...
 
     // Compound assignment
     PlusEq,
@@ -186,6 +189,8 @@ impl fmt::Display for TokenKind {
             TokenKind::Extern => write!(f, "`extern`"),
             TokenKind::SizeOf => write!(f, "`sizeof`"),
             TokenKind::As => write!(f, "`as`"),
+            TokenKind::Import => write!(f, "`import`"),
+            TokenKind::Const => write!(f, "`const`"),
             TokenKind::I8 => write!(f, "`i8`"),
             TokenKind::I16 => write!(f, "`i16`"),
             TokenKind::I32 => write!(f, "`i32`"),
@@ -233,6 +238,7 @@ impl fmt::Display for TokenKind {
             TokenKind::LtLt => write!(f, "`<<`"),
             TokenKind::GtGt => write!(f, "`>>`"),
             TokenKind::DotDot => write!(f, "`..`"),
+            TokenKind::DotDotDot => write!(f, "`...`"),
             TokenKind::PlusEq => write!(f, "`+=`"),
             TokenKind::MinusEq => write!(f, "`-=`"),
             TokenKind::StarEq => write!(f, "`*=`"),

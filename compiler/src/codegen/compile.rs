@@ -33,6 +33,7 @@ pub(crate) struct Codegen<'ctx> {
     pub(crate) current_fn: Option<FunctionValue<'ctx>>,
     pub(crate) current_fn_name: String,
     pub(crate) values: Vec<HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>>,
+    pub(crate) globals: HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     pub(crate) struct_types: HashMap<String, StructType<'ctx>>,
     pub(crate) printf_fn: FunctionValue<'ctx>,
     pub(crate) malloc_fn: FunctionValue<'ctx>,
@@ -119,6 +120,7 @@ impl<'ctx> Codegen<'ctx> {
     current_fn: None,
     current_fn_name: String::new(),
     values: vec![HashMap::new()],
+    globals: HashMap::new(),
     struct_types: HashMap::new(),
             printf_fn,
             malloc_fn,
@@ -689,7 +691,7 @@ impl<'ctx> Codegen<'ctx> {
                 return Some(v);
             }
         }
-        None
+        self.globals.get(name)
     }
     pub(crate) fn lookup_array_info(&self, name: &str) -> Option<&(Type, usize)> {
         for scope in self.array_info.iter().rev() {
@@ -735,13 +737,47 @@ impl<'ctx> Codegen<'ctx> {
             match stmt {
                 HirStmt::Fn {
                     name, params, ret, ..
-                } | HirStmt::ExternFn {
-                    name, params, ret, ..
                 } => {
-                    self.declare_function(name, params, ret, struct_field_types);
+                    self.declare_function(name, params, false, ret, struct_field_types);
+                }
+                HirStmt::ExternFn {
+                    name, params, is_variadic, ret, ..
+                } => {
+                    self.declare_function(name, params, *is_variadic, ret, struct_field_types);
                 }
                 HirStmt::GlobalAsm(asm, _) => {
                     self.module.set_inline_assembly(asm);
+                }
+                HirStmt::Const { name, ty, init, .. } => {
+                    let basic_ty = self.hir_type_to_basic(ty, struct_field_types);
+                    let global = self.module.add_global(basic_ty, None, name);
+                    global.set_constant(true);
+                    
+                    // We need to evaluate the init expr to a constant
+                    // If it's a simple literal, we can do it directly.
+                    // Instead of full compilation, we just compile it into the global init.
+                    // Wait, compile_expr needs a builder positioned in a basic block!
+                    // Let's create a dummy function, compile it, extract const, then delete it?
+                    // No, simpler: just match the literal manually here:
+                    let init_val: inkwell::values::BasicValueEnum<'ctx> = match init {
+                        crate::ir::HirExpr::Int(i, _, _) => self.context.i64_type().const_int(*i as u64, false).into(),
+                        crate::ir::HirExpr::Bool(b, _) => self.context.bool_type().const_int(if *b { 1 } else { 0 }, false).into(),
+                        crate::ir::HirExpr::String(s, _) => {
+                            let init_str = self.context.const_string(s.as_bytes(), true);
+                            let global_str = self.module.add_global(init_str.get_type(), None, ".str.const");
+                            global_str.set_initializer(&init_str);
+                            global_str.set_constant(true);
+                            global_str.as_pointer_value().into()
+                        }
+                        _ => panic!("constants must be simple literals"),
+                    };
+                    global.set_initializer(&init_val);
+                    self.globals.insert(name.clone(), (global.as_pointer_value(), basic_ty));
+                    // Also store its type in var_types so lookups (like arrays) can find it
+                    if self.var_types.is_empty() {
+                        self.var_types.push(HashMap::new());
+                    }
+                    self.var_types[0].insert(name.clone(), ty.clone());
                 }
                 _ => {}
             }
@@ -911,6 +947,7 @@ impl<'ctx> Codegen<'ctx> {
         &mut self,
         name: &str,
         params: &[(String, Type)],
+        is_variadic: bool,
         ret: &Type,
         struct_field_types: &StructFieldTypes,
     ) {
@@ -926,20 +963,24 @@ impl<'ctx> Codegen<'ctx> {
             })
             .collect();
         let fn_type = if *ret == Type::Void && name == "main" {
-            self.context.i32_type().fn_type(&llvm_param_tys, false)
+            self.context.i32_type().fn_type(&llvm_param_tys, is_variadic)
         } else if *ret == Type::Void {
-            self.context.void_type().fn_type(&llvm_param_tys, false)
+            self.context.void_type().fn_type(&llvm_param_tys, is_variadic)
         } else if matches!(ret, Type::Struct(_)) {
-            i8_ptr.fn_type(&llvm_param_tys, false)
+            i8_ptr.fn_type(&llvm_param_tys, is_variadic)
         } else {
             let llvm_ret = self.hir_type_to_basic(ret, struct_field_types);
-            llvm_ret.fn_type(&llvm_param_tys, false)
+            llvm_ret.fn_type(&llvm_param_tys, is_variadic)
         };
         let actual_name = if name == "main" && self.has_routes {
             "__rest_user_main"
         } else {
             name
         };
+        if let Some(existing) = self.module.get_function(actual_name) {
+            self.functions.insert(name.to_string(), existing);
+            return;
+        }
         let fn_val = self.module.add_function(actual_name, fn_type, None);
         self.functions.insert(name.to_string(), fn_val);
     }

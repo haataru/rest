@@ -23,6 +23,7 @@ pub enum HirStmt {
     ExternFn {
         name: String,
         params: Vec<(String, Type)>,
+        is_variadic: bool,
         ret: Type,
         span: Span,
     },
@@ -31,6 +32,12 @@ pub enum HirStmt {
         span: Span,
     },
     GlobalAsm(String, Span),
+    Const {
+        name: String,
+        ty: Type,
+        init: HirExpr,
+        span: Span,
+    },
     If {
         cond: HirExpr,
         then: Vec<HirStmt>,

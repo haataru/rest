@@ -1,0 +1,1 @@
+def main() -> i32 { let b = true; if b { print("it works!"); } return 0; }

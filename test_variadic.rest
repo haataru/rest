@@ -1,0 +1,6 @@
+extern "C" def printf(fmt: *u8, ...) -> i32;
+
+def main() -> i32 {
+    printf("Variadic works! %d %s\n" as *u8, 42, "hello" as *u8);
+    return 0;
+}

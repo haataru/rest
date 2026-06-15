@@ -342,6 +342,8 @@ impl<'a> Lexer<'a> {
             "extern" => TokenKind::Extern,
             "sizeof" => TokenKind::SizeOf,
             "as" => TokenKind::As,
+            "import" => TokenKind::Import,
+            "const" => TokenKind::Const,
             "i8" => TokenKind::I8,
             "i16" => TokenKind::I16,
             "i32" => TokenKind::I32,
@@ -375,6 +377,12 @@ impl<'a> Lexer<'a> {
 
     fn dot_or_range(&mut self, start: usize, line: usize, col: usize) -> Token {
         if self.pos + 1 < self.bytes.len() && self.bytes[self.pos + 1] == b'.' {
+            if self.pos + 2 < self.bytes.len() && self.bytes[self.pos + 2] == b'.' {
+                self.bump();
+                self.bump();
+                self.bump();
+                return Token::new(TokenKind::DotDotDot, self.span_at(start, self.pos, line, col));
+            }
             self.bump();
             self.bump();
             Token::new(TokenKind::DotDot, self.span_at(start, self.pos, line, col))

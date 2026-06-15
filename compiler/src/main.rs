@@ -150,40 +150,24 @@ or generate .ll and link manually:
     );
 }
 
-fn read_inputs(inputs: &[PathBuf]) -> Result<String> {
-    let mut combined = String::new();
-    for input in inputs {
-        if input.extension().is_none_or(|e| e != "rest") {
-            anyhow::bail!("input file must have .rest extension");
-        }
-        if !input.exists() {
-            anyhow::bail!("input file not found: {}", input.display());
-        }
-        let src = std::fs::read_to_string(input).with_context(|| format!("failed to read {}", input.display()))?;
-        combined.push_str(&src);
-        combined.push('\n');
-    }
-    Ok(combined)
-}
+// removed read_inputs
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Build { inputs, output, opt } => {
-            let source = read_inputs(&inputs)?;
             let level = opt_level(&opt)?;
             let o_path = output.with_extension("o");
-            driver::run(&source, &o_path, level)?;
+            driver::run(&inputs, &o_path, level)?;
             try_linker(&o_path, &output)?;
             let _ = std::fs::remove_file(&o_path);
         }
         Commands::Run { inputs, opt } => {
-            let source = read_inputs(&inputs)?;
             let level = opt_level(&opt)?;
             let o_path = PathBuf::from("temp.o");
             let exe_path = PathBuf::from("temp.out");
-            driver::run(&source, &o_path, level)?;
+            driver::run(&inputs, &o_path, level)?;
             try_linker(&o_path, &exe_path)?;
             let _ = std::fs::remove_file(&o_path);
             let status = std::process::Command::new(&exe_path)
@@ -195,9 +179,8 @@ fn main() -> Result<()> {
             }
         }
         Commands::Llvm { inputs, output, opt } => {
-            let source = read_inputs(&inputs)?;
             let level = opt_level(&opt)?;
-            driver::run(&source, &output, level)?;
+            driver::run(&inputs, &output, level)?;
         }
     }
 

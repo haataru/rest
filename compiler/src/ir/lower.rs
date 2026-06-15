@@ -38,7 +38,11 @@ impl Lowerer {
     }
 
     pub fn lower(&mut self, stmts: &[Stmt]) -> Result<Vec<HirStmt>, LowerError> {
-        stmts.iter().map(|s| self.lower_stmt(s)).collect()
+        stmts
+            .iter()
+            .filter(|s| !matches!(s, Stmt::Import(..)))
+            .map(|s| self.lower_stmt(s))
+            .collect()
     }
 
     fn get_expr_type(&self, expr: &Expr) -> Result<Type, LowerError> {
@@ -98,11 +102,13 @@ impl Lowerer {
                     span: *span,
                 })
             }
-            Stmt::ExternFn(name, params, ret, span) => {
+            Stmt::ExternFn(name, params, is_variadic, ret, span) => {
+                let ret = ret.clone().unwrap_or(Type::Void);
                 Ok(HirStmt::ExternFn {
                     name: name.clone(),
                     params: params.clone(),
-                    ret: ret.clone().unwrap_or(Type::Void),
+                    is_variadic: *is_variadic,
+                    ret,
                     span: *span,
                 })
             }
@@ -111,6 +117,17 @@ impl Lowerer {
                 span: *span,
             }),
             Stmt::GlobalAsm(asm, span) => Ok(HirStmt::GlobalAsm(asm.clone(), *span)),
+            Stmt::Const(name, _, init, span) => {
+                let init_hir = self.lower_expr(init)?;
+                let ty = self.get_expr_type(init)?;
+                Ok(HirStmt::Const {
+                    name: name.clone(),
+                    ty,
+                    init: init_hir,
+                    span: *span,
+                })
+            }
+            Stmt::Import(..) => unreachable!("imports should be filtered out"),
             Stmt::If(cond, then_stmts, else_stmts, span) => {
                 let hir_cond = self.lower_expr(cond)?;
                 let hir_then: Vec<HirStmt> = then_stmts

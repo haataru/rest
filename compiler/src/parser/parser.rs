@@ -6,11 +6,12 @@ use crate::sema::Type;
 pub(crate) struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    allow_struct_literal: bool,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, allow_struct_literal: true }
     }
 
     pub fn parse_file(&mut self) -> Result<Vec<Stmt>, ParseError> {
@@ -48,6 +49,8 @@ impl<'a> Parser<'a> {
                 }
                 self.parse_global_asm()
             }
+            TokenKind::Import => self.parse_import(),
+            TokenKind::Const => self.parse_const(),
             _ => {
                 if !decorators.is_empty() {
                     return Err(self.make_error(
@@ -184,7 +187,13 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
         self.expect(&TokenKind::LParen)?;
         let mut params = Vec::new();
+        let mut is_variadic = false;
         while !self.peek_is(&TokenKind::RParen) {
+            if self.peek_is(&TokenKind::DotDotDot) {
+                self.advance();
+                is_variadic = true;
+                break;
+            }
             let pname = self.expect_ident()?;
             self.expect(&TokenKind::Colon)?;
             let pty = self.parse_type()?;
@@ -201,7 +210,7 @@ impl<'a> Parser<'a> {
             None
         };
         self.expect_semicolon()?;
-        Ok(Stmt::ExternFn(name, params, ret, self.span_since(start)))
+        Ok(Stmt::ExternFn(name, params, is_variadic, ret, self.span_since(start)))
     }
 
     fn parse_struct_decl(&mut self) -> Result<Stmt, ParseError> {
@@ -242,6 +251,39 @@ impl<'a> Parser<'a> {
         Ok(Stmt::GlobalAsm(asm, self.span_since(start)))
     }
 
+    fn parse_import(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.peek_token().span;
+        self.advance(); // import
+        let path = match self.peek_kind() {
+            TokenKind::String(ref s) => s.clone(),
+            _ => {
+                return Err(self.make_error(
+                    "expected string literal for import path".into(),
+                    self.peek_token().span,
+                ));
+            }
+        };
+        self.advance();
+        self.expect_semicolon()?;
+        Ok(Stmt::Import(path, self.span_since(start)))
+    }
+
+    fn parse_const(&mut self) -> Result<Stmt, ParseError> {
+        let start = self.peek_token().span;
+        self.advance(); // const
+        let name = self.expect_ident()?;
+        let ty_annot = if self.peek_is(&TokenKind::Colon) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Eq)?;
+        let init = self.parse_expression()?;
+        self.expect_semicolon()?;
+        Ok(Stmt::Const(name, ty_annot, init, self.span_since(start)))
+    }
+
     fn parse_let(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek_token().span;
         self.advance(); // let
@@ -265,7 +307,11 @@ impl<'a> Parser<'a> {
     fn parse_if(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek_token().span;
         self.advance(); // if
+        
+        let prev_allow = self.allow_struct_literal;
+        self.allow_struct_literal = false;
         let cond = self.parse_expression()?;
+        self.allow_struct_literal = prev_allow;
         Self::reject_assignment_in_condition(&cond)?;
         let then_stmts = self.parse_block()?;
         let else_stmts = if self.peek_is(&TokenKind::Else) {
@@ -290,7 +336,11 @@ impl<'a> Parser<'a> {
     fn parse_while(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek_token().span;
         self.advance(); // while
+        
+        let prev_allow = self.allow_struct_literal;
+        self.allow_struct_literal = false;
         let cond = self.parse_expression()?;
+        self.allow_struct_literal = prev_allow;
         Self::reject_assignment_in_condition(&cond)?;
         let body = self.parse_block()?;
         Ok(Stmt::While(cond, body, self.span_since(start)))
@@ -319,9 +369,13 @@ impl<'a> Parser<'a> {
         self.advance(); // for
         let var = self.expect_ident()?;
         self.expect(&TokenKind::In)?;
+        
+        let prev_allow = self.allow_struct_literal;
+        self.allow_struct_literal = false;
         let lo = self.parse_expression()?;
         self.expect(&TokenKind::DotDot)?;
         let hi = self.parse_expression()?;
+        self.allow_struct_literal = prev_allow;
         let body = self.parse_block()?;
         Ok(Stmt::For(var, lo, hi, body, self.span_since(start)))
     }
@@ -524,7 +578,7 @@ impl<'a> Parser<'a> {
                     let sub = Expr::Binary(Box::new(expr.clone()), BinOp::Sub, Box::new(one), span);
                     expr = Expr::Assign(Box::new(expr), Box::new(sub), span);
                 }
-                TokenKind::LBrace => {
+                TokenKind::LBrace if self.allow_struct_literal => {
                     // Struct literal initializer: Ident { field: expr, ... }
                     let name_span = expr.span();
                     let name = match &expr {

@@ -29,9 +29,11 @@ pub enum Stmt {
         Vec<Decorator>,
         Span,
     ),
-    ExternFn(String, Vec<(String, Type)>, Option<Type>, Span),
+    ExternFn(String, Vec<(String, Type)>, bool, Option<Type>, Span),
     Struct(String, Vec<(String, Type)>, Span),
     GlobalAsm(String, Span),
+    Import(String, Span),
+    Const(String, Option<Type>, Expr, Span),
 }
 
 #[derive(Debug, Clone)]

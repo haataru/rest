@@ -19,7 +19,7 @@ pub enum Type {
     Bool,
     Array(Box<Type>, usize),
     Struct(String),
-    Fn(Vec<Type>, Box<Type>),
+    Fn(Vec<Type>, bool, Box<Type>),
     Pointer(Box<Type>),
     Void,
 }
@@ -78,13 +78,19 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::Array(elem, n) => write!(f, "{}[{}]", elem, n),
             Type::Struct(name) => write!(f, "{}", name),
-            Type::Fn(params, ret) => {
+            Type::Fn(params, is_variadic, ret) => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}", p)?;
+                }
+                if *is_variadic {
+                    if !params.is_empty() {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "...")?;
                 }
                 write!(f, ") -> {}", ret)
             }

@@ -357,10 +357,10 @@ impl TypeChecker {
                     }
                     let ret_ty = ret.clone().unwrap_or(Type::Void);
                     let param_tys: Vec<Type> = params.iter().map(|(_, t)| t.clone()).collect();
-                    self.define(name.clone(), Type::Fn(param_tys, Box::new(ret_ty.clone())));
+                    self.define(name.clone(), Type::Fn(param_tys, false, Box::new(ret_ty.clone())));
                 }
-                Stmt::ExternFn(name, params, ret, span) => {
-                    if self.lookup(name).is_some() {
+                Stmt::ExternFn(name, params, is_variadic, ret, span) => {
+                    if self.scopes.get(name).is_some() {
                         return Err(TypeckError::DuplicateDefinition {
                             name: name.clone(),
                             kind: "function".to_string(),
@@ -369,7 +369,7 @@ impl TypeChecker {
                     }
                     let ret_ty = ret.clone().unwrap_or(Type::Void);
                     let param_tys: Vec<Type> = params.iter().map(|(_, t)| t.clone()).collect();
-                    self.define(name.clone(), Type::Fn(param_tys, Box::new(ret_ty)));
+                    self.define(name.clone(), Type::Fn(param_tys, *is_variadic, Box::new(ret_ty)));
                 }
                 Stmt::Struct(name, fields, span) => {
                     if self.struct_fields.contains_key(name) {
@@ -395,6 +395,26 @@ impl TypeChecker {
                         }
                     }
                     self.struct_fields.insert(name.clone(), fields.clone());
+                }
+                Stmt::Const(name, ty_annot, init, span) => {
+                    if self.lookup(name).is_some() {
+                        return Err(TypeckError::DuplicateDefinition {
+                            name: name.clone(),
+                            kind: "constant".to_string(),
+                            span: *span,
+                        });
+                    }
+                    let ty = self.infer_expr_with_hint(init, ty_annot.as_ref())?;
+                    if let Some(annot) = ty_annot {
+                        if &ty != annot {
+                            return Err(TypeckError::TypeMismatch {
+                                expected: annot.clone(),
+                                found: ty,
+                                span: *span,
+                            });
+                        }
+                    }
+                    self.define(name.clone(), ty);
                 }
                 _ => {}
             }
@@ -603,7 +623,7 @@ impl TypeChecker {
                 }
                 Ok(())
             }
-            Stmt::Fn(..) | Stmt::ExternFn(..) | Stmt::Struct(..) | Stmt::GlobalAsm(..) => Ok(()),
+            Stmt::Fn(..) | Stmt::ExternFn(..) | Stmt::Struct(..) | Stmt::GlobalAsm(..) | Stmt::Import(..) | Stmt::Const(..) => Ok(()),
             Stmt::Break(span) => {
                 if self.loop_depth == 0 {
                     return Err(TypeckError::BreakOutsideLoop { span: *span });
@@ -789,22 +809,34 @@ impl TypeChecker {
                     .lookup(callee)
                     .ok_or_else(|| TypeckError::UndefinedFunction(callee.clone(), *span))?;
                 match fn_ty {
-                    Type::Fn(param_tys, ret_ty) => {
-                        if args.len() != param_tys.len() {
+                    Type::Fn(param_tys, is_variadic, ret_ty) => {
+                        let ok = if is_variadic {
+                            args.len() >= param_tys.len()
+                        } else {
+                            args.len() == param_tys.len()
+                        };
+                        if !ok {
                             return Err(TypeckError::WrongArgCount {
                                 expected: param_tys.len(),
                                 actual: args.len(),
                                 span: *span,
                             });
                         }
-                        for (i, arg) in args.iter().enumerate() {
-                            let arg_ty = self.infer_expr(arg)?;
-                            if arg_ty != param_tys[i] {
-                                return Err(TypeckError::TypeMismatch {
-                                    expected: param_tys[i].clone(),
-                                    found: arg_ty,
-                                    span: *span,
-                                });
+                        for (i, param_ty) in param_tys.iter().enumerate() {
+                            if i < args.len() {
+                                let arg_ty = self.infer_expr(&args[i])?;
+                                if &arg_ty != param_ty {
+                                    return Err(TypeckError::TypeMismatch {
+                                        expected: param_ty.clone(),
+                                        found: arg_ty,
+                                        span: *span,
+                                    });
+                                }
+                            }
+                        }
+                        if is_variadic {
+                            for arg in args.iter().skip(param_tys.len()) {
+                                self.infer_expr(arg)?;
                             }
                         }
                         Ok(*ret_ty)
