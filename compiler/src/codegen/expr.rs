@@ -55,7 +55,7 @@ impl<'ctx> Codegen<'ctx> {
             HirExpr::AllocStruct(struct_name, fields, _) => {
                 self.compile_alloc_struct(struct_name, fields, struct_field_types)
             }
-            HirExpr::Call(callee, args, _) => self.compile_call(callee, args, struct_field_types),
+            HirExpr::Call(callee, args, _, _) => self.compile_call(callee, args, struct_field_types),
             HirExpr::FieldLoad {
                 object,
                 index,

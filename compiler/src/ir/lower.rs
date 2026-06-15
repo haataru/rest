@@ -241,7 +241,7 @@ impl Lowerer {
                 }
                 let lowered: Result<Vec<HirExpr>, _> =
                     args.iter().map(|a| self.lower_expr(a)).collect();
-                Ok(HirExpr::Call(callee.clone(), lowered?, *span))
+                Ok(HirExpr::Call(callee.clone(), lowered?, self.get_expr_type(expr)?, *span))
             }
             Expr::FieldAccess(inner, field, span) => {
                 let object = Box::new(self.lower_expr(inner)?);

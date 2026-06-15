@@ -1,0 +1,38 @@
+
+extern "C" def exit(code: i32);
+extern "C" def mmap(addr: *u8, len: i64, prot: i32, flags: i32, fd: i32, offset: i64) -> *u8;
+
+def main() -> i32 {
+    let req: *HttpRequest = mmap(0 as *u8, 1024i64, 3, 34, -1, 0i64) as *HttpRequest;
+    let headers: *HttpHeader = mmap(0 as *u8, 4096i64, 3, 34, -1, 0i64) as *HttpHeader;
+    
+    (*req).headers = headers;
+    (*req).max_headers = 100;
+    
+    let raw_request: *u8 = "POST /api/v1/users HTTP/1.1\r\nHost: localhost:8080\r\nContent-Type: application/json\r\n\r\n{\"name\": \"John\"}" as *u8;
+    // Length is 98 bytes
+    let raw_len: i32 = 98;
+    
+    let parsed: i32 = parse_http_request(raw_request, raw_len, req);
+    
+    if (parsed == -1) {
+        print("Parse failed!\n");
+        print(parsed);
+        exit(1);
+    }
+    
+    print("Parsed bytes:\n");
+    print(parsed);
+    print("Method:\n");
+    print((*req).method);
+    print("Path len:\n");
+    print((*req).path_len);
+    print("Version:\n");
+    print((*req).version);
+    print("Num headers:\n");
+    print((*req).num_headers);
+    print("Body len:\n");
+    print((*req).body_len);
+    
+    return 0;
+}

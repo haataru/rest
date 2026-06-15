@@ -74,7 +74,7 @@ pub enum HirExpr {
     },
 
     AllocStruct(String, Vec<(String, HirExpr)>, Span),
-    Call(String, Vec<HirExpr>, Span),
+    Call(String, Vec<HirExpr>, Type, Span),
     FieldLoad {
         object: Box<HirExpr>,
         index: usize,
@@ -121,7 +121,7 @@ impl HirExpr {
             HirExpr::Ident { span, .. } => *span,
 
             HirExpr::AllocStruct(_, _, s) => *s,
-            HirExpr::Call(_, _, s) => *s,
+            HirExpr::Call(_, _, _, s) => *s,
             HirExpr::FieldLoad { span, .. } => *span,
             HirExpr::ArrayIndex { span, .. } => *span,
             HirExpr::ArrayLiteral(_, _, s) => *s,

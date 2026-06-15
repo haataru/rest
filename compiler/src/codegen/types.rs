@@ -82,6 +82,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             HirExpr::SizeOf(..) => Type::I64,
             HirExpr::Cast { target_ty, .. } => target_ty.clone(),
+            HirExpr::Call(_, _, ty, _) => ty.clone(),
             _ => Type::I64,
         }
     }
