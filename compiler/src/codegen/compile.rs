@@ -50,16 +50,12 @@ pub(crate) struct Codegen<'ctx> {
     pub(crate) rest_release_string_fn: FunctionValue<'ctx>,
     pub(crate) rest_print_string_fn: FunctionValue<'ctx>,
     pub(crate) rest_streq_fn: FunctionValue<'ctx>,
-    pub(crate) rest_register_route_fn: Option<FunctionValue<'ctx>>,
-    pub(crate) rest_start_server_fn: Option<FunctionValue<'ctx>>,
     pub(crate) functions: HashMap<String, FunctionValue<'ctx>>,
-    pub(crate) routes: Vec<(String, String, FunctionValue<'ctx>)>,
     pub(crate) loop_stack: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>, usize)>,
     pub(crate) owner_tracking: Vec<Vec<Owner>>,
     pub(crate) array_info: Vec<HashMap<String, (Type, usize)>>,
     pub(crate) var_types: Vec<HashMap<String, Type>>,
     pub(crate) runtime_compiled: bool,
-    pub(crate) has_routes: bool,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -100,7 +96,7 @@ impl<'ctx> Codegen<'ctx> {
         let rest_alloc_string_type = i8_ptr.fn_type(&[context.i64_type().into()], false);
         let rest_alloc_string_fn =
             module.add_function("rest_alloc_string", rest_alloc_string_type, None);
-        let rest_retain_string_type = context.void_type().fn_type(&[i8_ptr.into()], false);
+        let rest_retain_string_type = i8_ptr.fn_type(&[i8_ptr.into()], false);
         let rest_retain_string_fn =
             module.add_function("rest_retain_string", rest_retain_string_type, None);
         let rest_release_string_type = context.void_type().fn_type(&[i8_ptr.into()], false);
@@ -137,16 +133,12 @@ impl<'ctx> Codegen<'ctx> {
             rest_release_string_fn,
             rest_print_string_fn,
             rest_streq_fn,
-    rest_register_route_fn: None,
-    rest_start_server_fn: None,
     functions: HashMap::new(),
-            routes: Vec::new(),
     loop_stack: Vec::new(),
     owner_tracking: vec![Vec::new()],
             array_info: vec![HashMap::new()],
     var_types: vec![HashMap::new()],
     runtime_compiled: false,
-    has_routes: false,
         }
     }
     pub fn generate_ir(&self) -> String {
@@ -326,7 +318,8 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_return(None)?;
         let entry = self.context.append_basic_block(self.rest_retain_string_fn, "entry");
         self.builder.position_at_end(entry);
-        self.builder.build_return(None)?;
+        let retain_s = self.rest_retain_string_fn.get_nth_param(0).unwrap();
+        self.builder.build_return(Some(&retain_s))?;
 
         let entry = self.context.append_basic_block(self.rest_release_string_fn, "entry");
         self.builder.position_at_end(entry);
@@ -342,14 +335,90 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_call(self.printf_fn, &[data_ptr.into()], "printf")?;
         self.builder.build_return(None)?;
 
+        // rest_streq(s1, s2): равны ли две Rest-строки по содержимому.
+        // Сначала сравниваем длины (len@8), при равенстве — memcmp данных (data@16).
+        let seq_i64_ty = self.context.i64_type();
+        let seq_i64_ptr_ty = seq_i64_ty.ptr_type(inkwell::AddressSpace::default());
+        let seq_i8_ptr_ptr_ty = i8_ptr_ty.ptr_type(inkwell::AddressSpace::default());
+        let memcmp_ty = self
+            .context
+            .i32_type()
+            .fn_type(&[i8_ptr_ty.into(), i8_ptr_ty.into(), seq_i64_ty.into()], false);
+        let memcmp_fn = self
+            .module
+            .get_function("memcmp")
+            .unwrap_or_else(|| self.module.add_function("memcmp", memcmp_ty, None));
+
         let entry = self.context.append_basic_block(self.rest_streq_fn, "entry");
+        let cmp_bb = self.context.append_basic_block(self.rest_streq_fn, "cmp_data");
+        let ne_bb = self.context.append_basic_block(self.rest_streq_fn, "not_equal");
         self.builder.position_at_end(entry);
+        let eq_s1 = self.rest_streq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let eq_s2 = self.rest_streq_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        let l1_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), eq_s1, &[seq_i64_ty.const_int(8, false)], "eq_l1_ptr")? };
+        let l1_ptr_c = self.builder.build_pointer_cast(l1_ptr, seq_i64_ptr_ty, "eq_l1_ptr_c")?;
+        let l1 = self.builder.build_load(seq_i64_ty, l1_ptr_c, "eq_l1")?.into_int_value();
+        let l2_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), eq_s2, &[seq_i64_ty.const_int(8, false)], "eq_l2_ptr")? };
+        let l2_ptr_c = self.builder.build_pointer_cast(l2_ptr, seq_i64_ptr_ty, "eq_l2_ptr_c")?;
+        let l2 = self.builder.build_load(seq_i64_ty, l2_ptr_c, "eq_l2")?.into_int_value();
+        let len_eq = self.builder.build_int_compare(inkwell::IntPredicate::EQ, l1, l2, "len_eq")?;
+        self.builder.build_conditional_branch(len_eq, cmp_bb, ne_bb)?;
+
+        self.builder.position_at_end(cmp_bb);
+        let d1_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), eq_s1, &[seq_i64_ty.const_int(16, false)], "eq_d1_pp")? };
+        let d1_pp_c = self.builder.build_pointer_cast(d1_pp, seq_i8_ptr_ptr_ty, "eq_d1_pp_c")?;
+        let d1 = self.builder.build_load(i8_ptr_ty, d1_pp_c, "eq_d1")?.into_pointer_value();
+        let d2_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), eq_s2, &[seq_i64_ty.const_int(16, false)], "eq_d2_pp")? };
+        let d2_pp_c = self.builder.build_pointer_cast(d2_pp, seq_i8_ptr_ptr_ty, "eq_d2_pp_c")?;
+        let d2 = self.builder.build_load(i8_ptr_ty, d2_pp_c, "eq_d2")?.into_pointer_value();
+        let mc = self.builder.build_call(memcmp_fn, &[d1.into(), d2.into(), l1.into()], "eq_memcmp")?.try_as_basic_value().basic().unwrap().into_int_value();
+        let mc_zero = self.builder.build_int_compare(inkwell::IntPredicate::EQ, mc, self.context.i32_type().const_zero(), "eq_mc_zero")?;
+        self.builder.build_return(Some(&mc_zero))?;
+
+        self.builder.position_at_end(ne_bb);
         self.builder.build_return(Some(&self.context.bool_type().const_zero()))?;
 
+        // rest_strcat(s1, s2): склеивает две Rest-строки в новую owned-строку.
+        // Layout строки: ref_count@0, len@8, data@16 (отдельный malloc, null-terminated).
         let entry = self.context.append_basic_block(self.strcat_fn, "entry");
         self.builder.position_at_end(entry);
-        let s_strcat = self.strcat_fn.get_nth_param(0).unwrap().into_pointer_value();
-        self.builder.build_return(Some(&s_strcat))?;
+        let i64_ty = self.context.i64_type();
+        let i64_ptr_ty = i64_ty.ptr_type(inkwell::AddressSpace::default());
+        let i8_ptr_ptr_ty = i8_ptr_ty.ptr_type(inkwell::AddressSpace::default());
+        let s1 = self.strcat_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let s2 = self.strcat_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        // len1 = *(s1 + 8), len2 = *(s2 + 8)
+        let len1_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s1, &[i64_ty.const_int(8, false)], "len1_ptr")? };
+        let len1_ptr_i64 = self.builder.build_pointer_cast(len1_ptr, i64_ptr_ty, "len1_ptr_i64")?;
+        let len1 = self.builder.build_load(i64_ty, len1_ptr_i64, "len1")?.into_int_value();
+        let len2_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s2, &[i64_ty.const_int(8, false)], "len2_ptr")? };
+        let len2_ptr_i64 = self.builder.build_pointer_cast(len2_ptr, i64_ptr_ty, "len2_ptr_i64")?;
+        let len2 = self.builder.build_load(i64_ty, len2_ptr_i64, "len2")?.into_int_value();
+        let total = self.builder.build_int_add(len1, len2, "cat_total")?;
+
+        // result = rest_alloc_string(total) — выделяет структуру + буфер total+1 с \0 на конце.
+        let result = self.builder.build_call(self.rest_alloc_string_fn, &[total.into()], "cat_alloc")?.try_as_basic_value().basic().unwrap().into_pointer_value();
+
+        // data1 = *(s1 + 16), data2 = *(s2 + 16), dataR = *(result + 16)
+        let data1_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s1, &[i64_ty.const_int(16, false)], "data1_pp")? };
+        let data1_pp_c = self.builder.build_pointer_cast(data1_pp, i8_ptr_ptr_ty, "data1_pp_c")?;
+        let data1 = self.builder.build_load(i8_ptr_ty, data1_pp_c, "data1")?.into_pointer_value();
+        let data2_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s2, &[i64_ty.const_int(16, false)], "data2_pp")? };
+        let data2_pp_c = self.builder.build_pointer_cast(data2_pp, i8_ptr_ptr_ty, "data2_pp_c")?;
+        let data2 = self.builder.build_load(i8_ptr_ty, data2_pp_c, "data2")?.into_pointer_value();
+        let dataR_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), result, &[i64_ty.const_int(16, false)], "dataR_pp")? };
+        let dataR_pp_c = self.builder.build_pointer_cast(dataR_pp, i8_ptr_ptr_ty, "dataR_pp_c")?;
+        let data_r = self.builder.build_load(i8_ptr_ty, dataR_pp_c, "data_r")?.into_pointer_value();
+
+        // memcpy(dataR, data1, len1); memcpy(dataR + len1, data2, len2)
+        let bool_false = self.context.bool_type().const_zero();
+        self.builder.build_call(self.memcpy_fn, &[data_r.into(), data1.into(), len1.into(), bool_false.into()], "cat_cpy1")?;
+        let dst2 = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), data_r, &[len1], "cat_dst2")? };
+        self.builder.build_call(self.memcpy_fn, &[dst2.into(), data2.into(), len2.into(), bool_false.into()], "cat_cpy2")?;
+
+        self.builder.build_return(Some(&result))?;
 
         let entry = self.context.append_basic_block(self.rest_alloc_string_fn, "entry");
         self.builder.position_at_end(entry);
@@ -371,38 +440,6 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_store(data_field_ptr_casted, data_ptr)?;
         self.builder.build_return(Some(&s_ptr))?;
 
-        let void_ty = self.context.void_type();
-        let i8_ptr_ty = self
-            .context
-            .i8_type()
-            .ptr_type(inkwell::AddressSpace::default());
-        let handler_ty = i8_ptr_ty
-            .fn_type(&[i8_ptr_ty.into()], false)
-            .ptr_type(inkwell::AddressSpace::default());
-        let reg_route_ty = void_ty.fn_type(
-            &[i8_ptr_ty.into(), i8_ptr_ty.into(), handler_ty.into()],
-            false,
-        );
-        let reg_fn = self.module.add_function(
-            "rest_register_route",
-            reg_route_ty,
-            None,
-        );
-        let entry = self.context.append_basic_block(reg_fn, "entry");
-        self.builder.position_at_end(entry);
-        self.builder.build_return(None)?;
-        self.rest_register_route_fn = Some(reg_fn);
-        let i32_ty = self.context.i32_type();
-        let start_server_ty = void_ty.fn_type(&[i32_ty.into()], false);
-        let start_fn = self.module.add_function(
-            "rest_start_server",
-            start_server_ty,
-            None,
-        );
-        let entry = self.context.append_basic_block(start_fn, "entry");
-        self.builder.position_at_end(entry);
-        self.builder.build_return(None)?;
-        self.rest_start_server_fn = Some(start_fn);
         self.runtime_compiled = true;
         Ok(())
     }
@@ -781,13 +818,6 @@ impl<'ctx> Codegen<'ctx> {
     ) -> Result<()> {
         self.compile_runtime_fns()?;
         self.build_struct_types(stmts, struct_field_types);
-        self.has_routes = stmts.iter().any(|stmt| {
-            if let HirStmt::Fn { decorators, .. } = stmt {
-                !decorators.is_empty()
-            } else {
-                false
-            }
-        });
         for stmt in stmts {
             match stmt {
                 HirStmt::Fn {
@@ -843,7 +873,6 @@ impl<'ctx> Codegen<'ctx> {
                 params,
                 ret,
                 body,
-                decorators,
                 span: _,
             } = stmt
             {
@@ -852,132 +881,10 @@ impl<'ctx> Codegen<'ctx> {
                     .get(name)
                     .copied()
                     .ok_or_else(|| anyhow::anyhow!("undefined function `{}`", name))?;
-                if !decorators.is_empty() {
-                    let wrapper_val = self.generate_http_wrapper(name, fn_val, params, ret)?;
-                    for dec in decorators {
-                        if let Some(path) = &dec.arg {
-                            self.routes
-                                .push((dec.name.clone(), path.clone(), wrapper_val));
-                        }
-                    }
-                }
                 self.compile_fn_body(fn_val, params, ret, body, struct_field_types)?;
             }
         }
-        if self.has_routes {
-            self.generate_rest_main()?;
-        }
         Ok(())
-    }
-    pub(crate) fn generate_rest_main(&mut self) -> Result<()> {
-        let i32_ty = self.context.i32_type();
-        let main_type = i32_ty.fn_type(&[], false);
-        let main_fn = self.module.add_function("main", main_type, None);
-        let bb = self.context.append_basic_block(main_fn, "entry");
-        self.builder.position_at_end(bb);
-        let i8_ptr_ty = self
-            .context
-            .i8_type()
-            .ptr_type(inkwell::AddressSpace::default());
-        for (method, path, handler_fn) in &self.routes {
-            let method_global = self
-                .builder
-                .build_global_string_ptr(method, "method")
-                .unwrap();
-            let path_global = self.builder.build_global_string_ptr(path, "path").unwrap();
-            let handler_ptr = self
-                .builder
-                .build_pointer_cast(
-                    handler_fn.as_global_value().as_pointer_value(),
-                    i8_ptr_ty,
-                    "handler_cast",
-                )
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.rest_register_route_fn.unwrap(),
-                    &[
-                        method_global.as_pointer_value().into(),
-                        path_global.as_pointer_value().into(),
-                        handler_ptr.into(),
-                    ],
-                    "reg",
-                )
-                .unwrap();
-        }
-        if let Some(user_main) = self.functions.get("main") {
-            self.builder
-                .build_call(*user_main, &[], "call_user_main")
-                .unwrap();
-        }
-        self.builder
-            .build_call(
-                self.rest_start_server_fn.unwrap(),
-                &[i32_ty.const_int(8080, false).into()],
-                "start",
-            )
-            .unwrap();
-        self.builder
-            .build_return(Some(&i32_ty.const_int(0, false)))
-            .unwrap();
-        Ok(())
-    }
-    pub(crate) fn generate_http_wrapper(
-        &mut self,
-        name: &str,
-        original_fn: FunctionValue<'ctx>,
-        params: &[(String, Type)],
-        ret: &Type,
-    ) -> Result<FunctionValue<'ctx>> {
-        let i8_ptr_type = self
-            .context
-            .i8_type()
-            .ptr_type(inkwell::AddressSpace::default());
-        let wrapper_type = i8_ptr_type.fn_type(&[i8_ptr_type.into()], false);
-        let wrapper_name = format!("__rest_http_wrapper_{}", name);
-        let wrapper_fn = self.module.add_function(
-            &wrapper_name,
-            wrapper_type,
-            Some(inkwell::module::Linkage::Internal),
-        );
-        let bb = self.context.append_basic_block(wrapper_fn, "entry");
-        let prev_bb = self.builder.get_insert_block();
-        self.builder.position_at_end(bb);
-        let mut args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = Vec::new();
-        let body_param = wrapper_fn.get_nth_param(0).unwrap();
-        if params.len() == 1 && params[0].1 == Type::String {
-            self.builder
-                .build_call(
-                    self.rest_retain_string_fn,
-                    &[body_param.into()],
-                    "retain_body",
-                )
-                .unwrap();
-            args.push(body_param.into());
-        }
-        let call_site = self
-            .builder
-            .build_call(original_fn, &args, "call_orig")
-            .unwrap();
-        self.builder
-            .build_call(
-                self.rest_release_string_fn,
-                &[body_param.into()],
-                "release_body",
-            )
-            .unwrap();
-        if *ret == Type::String {
-            let res_val = call_site.try_as_basic_value().basic().unwrap();
-            self.builder.build_return(Some(&res_val)).unwrap();
-        } else {
-            self.builder
-                .build_return(Some(&i8_ptr_type.const_null()))
-                .unwrap();
-        }
-        if let Some(pbb) = prev_bb {
-            self.builder.position_at_end(pbb);
-        }
-        Ok(wrapper_fn)
     }
     pub(crate) fn owner_scope_mut(&mut self) -> &mut Vec<Owner> {
         self.owner_tracking
@@ -1027,16 +934,11 @@ impl<'ctx> Codegen<'ctx> {
             let llvm_ret = self.hir_type_to_basic(ret, struct_field_types);
             llvm_ret.fn_type(&llvm_param_tys, is_variadic)
         };
-        let actual_name = if name == "main" && self.has_routes {
-            "__rest_user_main"
-        } else {
-            name
-        };
-        if let Some(existing) = self.module.get_function(actual_name) {
+        if let Some(existing) = self.module.get_function(name) {
             self.functions.insert(name.to_string(), existing);
             return;
         }
-        let fn_val = self.module.add_function(actual_name, fn_type, None);
+        let fn_val = self.module.add_function(name, fn_type, None);
         self.functions.insert(name.to_string(), fn_val);
     }
     pub(crate) fn compile_fn_body(

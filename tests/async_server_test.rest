@@ -1,6 +1,0 @@
-import "http_server";
-
-def main() -> i32 {
-    start_server(8080);
-    return 0;
-}

@@ -840,6 +840,11 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
             }
+            HirExpr::Dereference(inner, _) => {
+                let ptr_val = self.compile_expr(inner, struct_field_types)?;
+                let rhs_val = self.compile_expr(rhs, struct_field_types)?;
+                self.builder.build_store(ptr_val.into_pointer_value(), rhs_val)?;
+            }
             _ => {}
         }
         Ok(self.context.i32_type().const_zero().into())

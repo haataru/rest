@@ -23,86 +23,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_decl_or_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let mut decorators = Vec::new();
-        while self.peek_is(&TokenKind::At) {
-            decorators.push(self.parse_decorator()?);
-        }
-
         match self.peek_kind() {
             TokenKind::Extern => self.parse_extern_fn_decl(),
-            TokenKind::Fn => self.parse_fn_decl(decorators),
-            TokenKind::Struct => {
-                if !decorators.is_empty() {
-                    return Err(self.make_error(
-                        "decorators not allowed on structs".into(),
-                        decorators[0].span,
-                    ));
-                }
-                self.parse_struct_decl()
-            }
-            TokenKind::Ident(ref id) if id == "global_asm" => {
-                if !decorators.is_empty() {
-                    return Err(self.make_error(
-                        "decorators not allowed on global_asm".into(),
-                        decorators[0].span,
-                    ));
-                }
-                self.parse_global_asm()
-            }
+            TokenKind::Fn => self.parse_fn_decl(),
+            TokenKind::Struct => self.parse_struct_decl(),
+            TokenKind::Ident(ref id) if id == "global_asm" => self.parse_global_asm(),
             TokenKind::Import => self.parse_import(),
             TokenKind::Const => self.parse_const(),
-            _ => {
-                if !decorators.is_empty() {
-                    return Err(self.make_error(
-                        "decorators only allowed on functions".into(),
-                        decorators[0].span,
-                    ));
-                }
-                self.parse_stmt()
-            }
+            _ => self.parse_stmt(),
         }
-    }
-
-    fn parse_decorator(&mut self) -> Result<crate::parser::Decorator, ParseError> {
-        let start = self.peek_token().span;
-        self.advance(); // consume '@'
-
-        let name = match self.peek_kind() {
-            TokenKind::Ident(ref s) => s.clone(),
-            _ => {
-                return Err(self.make_error(
-                    "expected identifier after `@`".into(),
-                    self.peek_token().span,
-                ));
-            }
-        };
-        self.advance();
-
-        let mut arg = None;
-        if self.peek_is(&TokenKind::LParen) {
-            self.advance();
-            arg = match self.peek_kind() {
-                TokenKind::String(ref s) => Some(s.clone()),
-                _ => {
-                    return Err(self.make_error(
-                        "expected string literal in decorator".into(),
-                        self.peek_token().span,
-                    ));
-                }
-            };
-            self.advance();
-            if !self.peek_is(&TokenKind::RParen) {
-                return Err(self.make_error("expected `)`".into(), self.peek_token().span));
-            }
-            self.advance();
-        }
-
-        let end = self.tokens[self.pos - 1].span;
-        Ok(crate::parser::Decorator {
-            name,
-            arg,
-            span: Span::new(start.start, end.end, start.line, start.col),
-        })
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt, ParseError> {
@@ -137,10 +66,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_fn_decl(
-        &mut self,
-        decorators: Vec<crate::parser::Decorator>,
-    ) -> Result<Stmt, ParseError> {
+    fn parse_fn_decl(&mut self) -> Result<Stmt, ParseError> {
         let start = self.peek_token().span;
         self.advance(); // fn
         let name = self.expect_ident()?;
@@ -169,7 +95,6 @@ impl<'a> Parser<'a> {
             params,
             ret,
             body,
-            decorators,
             self.span_since(start),
         ))
     }
