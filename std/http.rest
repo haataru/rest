@@ -1,15 +1,20 @@
 // Zero-copy HTTP Parser
 
 // Constants for HTTP Methods
-// UNKNOWN = 0
-// GET     = 1
-// POST    = 2
-// PUT     = 3
-// DELETE  = 4
-// HEAD    = 5
-// OPTIONS = 6
-// PATCH   = 7
-// TRACE   = 8
+const HTTP_UNKNOWN: i32 = 0;
+const HTTP_GET: i32 = 1;
+const HTTP_POST: i32 = 2;
+const HTTP_PUT: i32 = 3;
+const HTTP_DELETE: i32 = 4;
+const HTTP_HEAD: i32 = 5;
+const HTTP_OPTIONS: i32 = 6;
+const HTTP_PATCH: i32 = 7;
+const HTTP_TRACE: i32 = 8;
+
+const CHAR_SPACE: u8 = 32; 
+const CHAR_CR: u8 = 13; 
+const CHAR_LF: u8 = 10; 
+const CHAR_COLON: u8 = 58; 
 
 model HttpHeader {
     name: *u8,
@@ -67,28 +72,28 @@ def find_char(buf: *u8, len: i32, c: u8) -> i32 {
 
 def parse_method(method_str: *u8, len: i32) -> i32 {
     if len == 3 {
-        if http_strncmp(method_str, "GET" as *u8, 3) == 0 { return 1; }
-        if http_strncmp(method_str, "PUT" as *u8, 3) == 0 { return 3; }
+        if http_strncmp(method_str, "GET" as *u8, 3) == 0 { return HTTP_GET; }
+        if http_strncmp(method_str, "PUT" as *u8, 3) == 0 { return HTTP_PUT; }
     } else {
         if len == 4 {
-            if http_strncmp(method_str, "POST" as *u8, 4) == 0 { return 2; }
-            if http_strncmp(method_str, "HEAD" as *u8, 4) == 0 { return 5; }
+            if http_strncmp(method_str, "POST" as *u8, 4) == 0 { return HTTP_POST; }
+            if http_strncmp(method_str, "HEAD" as *u8, 4) == 0 { return HTTP_HEAD; }
         } else {
             if len == 5 {
-                if http_strncmp(method_str, "PATCH" as *u8, 5) == 0 { return 7; }
-                if http_strncmp(method_str, "TRACE" as *u8, 5) == 0 { return 8; }
+                if http_strncmp(method_str, "PATCH" as *u8, 5) == 0 { return HTTP_PATCH; }
+                if http_strncmp(method_str, "TRACE" as *u8, 5) == 0 { return HTTP_TRACE; }
             } else {
                 if len == 6 {
-                    if http_strncmp(method_str, "DELETE" as *u8, 6) == 0 { return 4; }
+                    if http_strncmp(method_str, "DELETE" as *u8, 6) == 0 { return HTTP_DELETE; }
                 } else {
                     if len == 7 {
-                        if http_strncmp(method_str, "OPTIONS" as *u8, 7) == 0 { return 6; }
+                        if http_strncmp(method_str, "OPTIONS" as *u8, 7) == 0 { return HTTP_OPTIONS; }
                     }
                 }
             }
         }
     }
-    return 0;
+    return HTTP_UNKNOWN;
 }
 
 // Parse HTTP request
@@ -97,7 +102,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
     // 1. Parse Request-Line
     // Format: METHOD PATH HTTP/1.1\r\n
     
-    let space1: i32 = find_char(buf, len, 32 as u8); // 32 is ' '
+    let space1: i32 = find_char(buf, len, CHAR_SPACE);
     if (space1 == -1) {
         return 0; // incomplete
     }
@@ -107,7 +112,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
     let buf_after_method: *u8 = ((buf as i64) + (space1 as i64) + 1i64) as *u8;
     let len_after_method: i32 = len - space1 - 1;
     
-    let space2: i32 = find_char(buf_after_method, len_after_method, 32 as u8);
+    let space2: i32 = find_char(buf_after_method, len_after_method, CHAR_SPACE);
     if (space2 == -1) {
         return 0; // incomplete
     }
@@ -118,7 +123,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
     let buf_after_path: *u8 = ((buf_after_method as i64) + (space2 as i64) + 1i64) as *u8;
     let len_after_path: i32 = len_after_method - space2 - 1;
     
-    let r_char: i32 = find_char(buf_after_path, len_after_path, 13 as u8); // 13 is '\r'
+    let r_char: i32 = find_char(buf_after_path, len_after_path, CHAR_CR);
     if (r_char == -1) {
         return 0; // incomplete
     }
@@ -130,7 +135,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
     }
     let n_char_ptr: *u8 = ((buf_after_path as i64) + (r_char as i64) + 1i64) as *u8;
     let n_char: u8 = *n_char_ptr;
-    if (n_char as i32) != 10 { // 10 is '\n'
+    if (n_char as i32) != (CHAR_LF as i32) {
         return -1; // error
     }
     
@@ -154,8 +159,8 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
         let c0: u8 = *curr_buf;
         let c1_ptr: *u8 = ((curr_buf as i64) + 1i64) as *u8;
         let c1: u8 = *c1_ptr;
-        if (c0 as i32) == 13 {
-            if (c1 as i32) == 10 {
+        if (c0 as i32) == (CHAR_CR as i32) {
+            if (c1 as i32) == (CHAR_LF as i32) {
                 // End of headers
                 curr_buf = ((curr_buf as i64) + 2i64) as *u8;
                 curr_len = curr_len - 2;
@@ -166,7 +171,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
             }
         } else {
             // Parse header: "Name: Value\r\n"
-            let colon: i32 = find_char(curr_buf, curr_len, 58 as u8); // 58 is ':'
+            let colon: i32 = find_char(curr_buf, curr_len, CHAR_COLON);
             if (colon == -1) {
                 return 0; // incomplete
             }
@@ -185,7 +190,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
                     return 0; // incomplete
                 }
                 let sc: u8 = *curr_buf;
-                if (sc as i32) == 32 {
+                if (sc as i32) == (CHAR_SPACE as i32) {
                     curr_buf = ((curr_buf as i64) + 1i64) as *u8;
                     curr_len = curr_len - 1;
                     parsed_bytes = parsed_bytes + 1;
@@ -194,7 +199,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
                 }
             }
             
-            let r_pos: i32 = find_char(curr_buf, curr_len, 13 as u8); // '\r'
+            let r_pos: i32 = find_char(curr_buf, curr_len, CHAR_CR);
             if (r_pos == -1) {
                 return 0; // incomplete
             }
@@ -208,7 +213,7 @@ def parse_http_request(buf: *u8, len: i32, req: *HttpRequest) -> i32 {
             }
             let n_ptr: *u8 = ((curr_buf as i64) + (r_pos as i64) + 1i64) as *u8;
             let nc: u8 = *n_ptr;
-            if (nc as i32) != 10 {
+            if (nc as i32) != (CHAR_LF as i32) {
                 return -1;
             }
             

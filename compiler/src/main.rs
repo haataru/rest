@@ -66,14 +66,6 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
                     exe_path.to_string_lossy().into_owned(),
                     o_path.to_string_lossy().into_owned(),
                 ];
-                let mut lib_path = std::env::current_exe().unwrap();
-                lib_path.pop(); // remove `restc`
-                lib_path.push("librest_runtime.a");
-                if lib_path.exists() {
-                    args.push(lib_path.to_string_lossy().into_owned());
-                } else {
-                    args.push("-lrest_runtime".to_string()); // Fallback if installed
-                }
                 args.push("-lpthread".to_string());
                 args.push("-ldl".to_string());
                 args.push("-lutil".to_string());
@@ -104,14 +96,6 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
                 o_path.to_string_lossy().into_owned(),
             ];
             let mut lib_path = std::env::current_exe().unwrap();
-            lib_path.pop(); // remove `restc`
-            lib_path.push("librest_runtime.a");
-            if lib_path.exists() {
-                args.push(lib_path.to_string_lossy().into_owned());
-            } else {
-                args.push("-lrest_runtime".to_string()); // Fallback if installed
-            }
-            args.push("-lpthread".to_string());
             args.push("-ldl".to_string());
             args.push("-lutil".to_string());
             args.push("-lrt".to_string());
@@ -161,12 +145,12 @@ fn main() -> Result<()> {
             let o_path = output.with_extension("o");
             driver::run(&inputs, &o_path, level)?;
             try_linker(&o_path, &output)?;
-            let _ = std::fs::remove_file(&o_path);
+            //let _ = std::fs::remove_file(&o_path);
         }
         Commands::Run { inputs, opt } => {
             let level = opt_level(&opt)?;
             let o_path = PathBuf::from("temp.o");
-            let exe_path = PathBuf::from("temp.out");
+            let exe_path = PathBuf::from("./temp.out");
             driver::run(&inputs, &o_path, level)?;
             try_linker(&o_path, &exe_path)?;
             let _ = std::fs::remove_file(&o_path);

@@ -1,10 +1,11 @@
+import "scheduler";
 // Test Green Threads
 extern "C" def usleep(usec: i32) -> i32;
 
 // The user defines the router.
 // This is the universal entry point for all fibers.
 @no_mangle
-def fiber_router(sched: *Scheduler, func_id: i32) {
+def fiber_router(sched: *Scheduler, func_id: i32, arg: i64) {
     print("fiber_router entered\n");
     if func_id == 1 {
         print("Hello from Fiber 1! Starting...\n");
@@ -34,8 +35,8 @@ def main() -> i32 {
     let sched: *Scheduler = create_scheduler();
     
     print("Spawning fibers...\n");
-    spawn(sched, 1);
-    spawn(sched, 2);
+    spawn(sched, 1, 0i64);
+    spawn(sched, 2, 0i64);
     
     print("Running event loop...\n");
     // We will do a mini run loop here

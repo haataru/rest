@@ -324,6 +324,53 @@ impl<'ctx> Codegen<'ctx> {
         self.builder
             .build_call(self.free_fn, &[real_ptr.into()], "free")?;
         self.builder.build_return(None)?;
+        let entry = self.context.append_basic_block(self.rest_retain_string_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.build_return(None)?;
+
+        let entry = self.context.append_basic_block(self.rest_release_string_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.build_return(None)?;
+
+        let entry = self.context.append_basic_block(self.rest_print_string_fn, "entry");
+        self.builder.position_at_end(entry);
+        let print_s = self.rest_print_string_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let data_field_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), print_s, &[self.context.i64_type().const_int(16, false)], "data_field_ptr")? };
+        let i8_ptr_ty = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
+        let data_field_ptr_casted = self.builder.build_pointer_cast(data_field_ptr, i8_ptr_ty.ptr_type(inkwell::AddressSpace::default()), "data_field_ptr_casted")?;
+        let data_ptr = self.builder.build_load(i8_ptr_ty, data_field_ptr_casted, "data_ptr")?;
+        self.builder.build_call(self.printf_fn, &[data_ptr.into()], "printf")?;
+        self.builder.build_return(None)?;
+
+        let entry = self.context.append_basic_block(self.rest_streq_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.build_return(Some(&self.context.bool_type().const_zero()))?;
+
+        let entry = self.context.append_basic_block(self.strcat_fn, "entry");
+        self.builder.position_at_end(entry);
+        let s_strcat = self.strcat_fn.get_nth_param(0).unwrap().into_pointer_value();
+        self.builder.build_return(Some(&s_strcat))?;
+
+        let entry = self.context.append_basic_block(self.rest_alloc_string_fn, "entry");
+        self.builder.position_at_end(entry);
+        let s_len = self.rest_alloc_string_fn.get_nth_param(0).unwrap().into_int_value();
+        let struct_size = self.context.i64_type().const_int(24, false);
+        let s_ptr = self.builder.build_call(self.malloc_fn, &[struct_size.into()], "malloc_struct")?.try_as_basic_value().basic().unwrap().into_pointer_value();
+        let rc_ptr = self.builder.build_pointer_cast(s_ptr, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "rc_ptr")?;
+        self.builder.build_store(rc_ptr, self.context.i64_type().const_int(1, false))?;
+        let len_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s_ptr, &[self.context.i64_type().const_int(8, false)], "len_ptr")? };
+        let len_ptr_i64 = self.builder.build_pointer_cast(len_ptr, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "len_ptr_i64")?;
+        self.builder.build_store(len_ptr_i64, s_len)?;
+        let one = self.context.i64_type().const_int(1, false);
+        let data_len = self.builder.build_int_add(s_len, one, "data_len")?;
+        let data_ptr = self.builder.build_call(self.malloc_fn, &[data_len.into()], "malloc_data")?.try_as_basic_value().basic().unwrap().into_pointer_value();
+        let null_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), data_ptr, &[s_len], "null_ptr")? };
+        self.builder.build_store(null_ptr, self.context.i8_type().const_zero())?;
+        let data_field_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s_ptr, &[self.context.i64_type().const_int(16, false)], "data_field_ptr")? };
+        let data_field_ptr_casted = self.builder.build_pointer_cast(data_field_ptr, i8_ptr_ty.ptr_type(inkwell::AddressSpace::default()), "data_field_ptr_casted")?;
+        self.builder.build_store(data_field_ptr_casted, data_ptr)?;
+        self.builder.build_return(Some(&s_ptr))?;
+
         let void_ty = self.context.void_type();
         let i8_ptr_ty = self
             .context
@@ -336,18 +383,26 @@ impl<'ctx> Codegen<'ctx> {
             &[i8_ptr_ty.into(), i8_ptr_ty.into(), handler_ty.into()],
             false,
         );
-        self.rest_register_route_fn = Some(self.module.add_function(
+        let reg_fn = self.module.add_function(
             "rest_register_route",
             reg_route_ty,
-            Some(inkwell::module::Linkage::External),
-        ));
+            None,
+        );
+        let entry = self.context.append_basic_block(reg_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.build_return(None)?;
+        self.rest_register_route_fn = Some(reg_fn);
         let i32_ty = self.context.i32_type();
         let start_server_ty = void_ty.fn_type(&[i32_ty.into()], false);
-        self.rest_start_server_fn = Some(self.module.add_function(
+        let start_fn = self.module.add_function(
             "rest_start_server",
             start_server_ty,
-            Some(inkwell::module::Linkage::External),
-        ));
+            None,
+        );
+        let entry = self.context.append_basic_block(start_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.builder.build_return(None)?;
+        self.rest_start_server_fn = Some(start_fn);
         self.runtime_compiled = true;
         Ok(())
     }
