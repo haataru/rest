@@ -28,6 +28,24 @@ pub fn run(inputs: &[PathBuf], output: &Path, opt_level: OptimizationLevel) -> R
     codegen::generate(output, &hir, struct_field_types, opt_level)
 }
 
+pub fn run_jit(inputs: &[PathBuf], opt_level: OptimizationLevel) -> Result<i32> {
+    let mut all_stmts = Vec::new();
+    let mut visited = HashSet::new();
+
+    for input in inputs {
+        let abs_path = std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf());
+        load_module(&abs_path, &mut all_stmts, &mut visited)?;
+    }
+
+    let mut checker = TypeChecker::new();
+    checker.check(&all_stmts)?;
+    let ctx = checker.into_context();
+    let mut lowerer = Lowerer::new(ctx);
+    let hir = lowerer.lower(&all_stmts)?;
+    let struct_field_types = lowerer.struct_types().clone();
+    codegen::execute_jit(&hir, struct_field_types, opt_level)
+}
+
 fn load_module(
     path: &Path,
     all_stmts: &mut Vec<Stmt>,

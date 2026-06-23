@@ -19,7 +19,7 @@ fn opt_level(s: &str) -> Result<OptimizationLevel> {
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -46,6 +46,12 @@ enum Commands {
         inputs: Vec<PathBuf>,
         #[arg(short = 'o', long, default_value = "out.ll")]
         output: PathBuf,
+        opt: String,
+    },
+    /// Compile and run the .rest file directly in memory via JIT
+    Jit {
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
         #[arg(short = 'O', long, default_value = "none")]
         opt: String,
     },
@@ -95,7 +101,7 @@ fn try_linker(o_path: &Path, exe_path: &Path) -> Result<()> {
                 exe_path.to_string_lossy().into_owned(),
                 o_path.to_string_lossy().into_owned(),
             ];
-            let mut lib_path = std::env::current_exe().unwrap();
+
             args.push("-ldl".to_string());
             args.push("-lutil".to_string());
             args.push("-lrt".to_string());
@@ -136,35 +142,91 @@ or generate .ll and link manually:
 
 // removed read_inputs
 
+fn print_ascii_art() {
+    use colored::Colorize;
+    let art = r#"
+    ____  ___________ ______
+   / __ \/ ____/ ___//_  __/
+  / /_/ / __/  \__ \  / /   
+ / _, _/ /___ ___/ / / /    
+/_/ |_/_____//____/ /_/     
+"#;
+    println!("{}", art.cyan().bold());
+    println!("{}", "REST Compiler v0.1.0".green().bold());
+    println!("Type `restc --help` for usage.\n");
+}
+
+fn handle_error(err: anyhow::Error) {
+    use colored::Colorize;
+    eprintln!("\n{} {}", "[!] COMPILATION ERROR:".red().bold(), err.to_string().yellow());
+    std::process::exit(1);
+}
+
 fn main() -> Result<()> {
+    use colored::Colorize;
+    colored::control::set_override(true);
+
     let cli = Cli::parse();
 
-    match cli.command {
+    let cmd = match cli.command {
+        Some(c) => c,
+        None => {
+            print_ascii_art();
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            cmd.print_help()?;
+            return Ok(());
+        }
+    };
+
+    match cmd {
         Commands::Build { inputs, output, opt } => {
             let level = opt_level(&opt)?;
             let o_path = output.with_extension("o");
-            driver::run(&inputs, &o_path, level)?;
-            try_linker(&o_path, &output)?;
-            //let _ = std::fs::remove_file(&o_path);
+            if let Err(e) = driver::run(&inputs, &o_path, level) {
+                handle_error(e);
+            }
+            if let Err(e) = try_linker(&o_path, &output) {
+                handle_error(e);
+            }
+            println!("{}", format!("[✓] SUCCESS: Binary `{}` compiled successfully!", output.display()).blue().bold());
         }
         Commands::Run { inputs, opt } => {
             let level = opt_level(&opt)?;
             let o_path = PathBuf::from("temp.o");
             let exe_path = PathBuf::from("./temp.out");
-            driver::run(&inputs, &o_path, level)?;
-            try_linker(&o_path, &exe_path)?;
+            if let Err(e) = driver::run(&inputs, &o_path, level) {
+                handle_error(e);
+            }
+            if let Err(e) = try_linker(&o_path, &exe_path) {
+                handle_error(e);
+            }
             let _ = std::fs::remove_file(&o_path);
             let status = std::process::Command::new(&exe_path)
                 .status()
-                .context("failed to run executable")?;
+                .context("failed to run executable");
             let _ = std::fs::remove_file(&exe_path);
-            if !status.success() {
-                std::process::exit(status.code().unwrap_or(1));
+            
+            match status {
+                Ok(s) if !s.success() => std::process::exit(s.code().unwrap_or(1)),
+                Err(e) => handle_error(e),
+                _ => {}
             }
         }
         Commands::Llvm { inputs, output, opt } => {
             let level = opt_level(&opt)?;
-            driver::run(&inputs, &output, level)?;
+            if let Err(e) = driver::run(&inputs, &output, level) {
+                handle_error(e);
+            }
+            println!("{}", format!("[✓] SUCCESS: LLVM IR written to `{}`!", output.display()).blue().bold());
+        }
+        Commands::Jit { inputs, opt } => {
+            let level = opt_level(&opt)?;
+            match driver::run_jit(&inputs, level) {
+                Ok(ret) if ret != 0 => std::process::exit(ret),
+                Err(e) => handle_error(e),
+                _ => {}
+            }
         }
     }
 

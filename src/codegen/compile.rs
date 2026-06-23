@@ -1,8 +1,7 @@
 use crate::ir::{HirExpr, HirStmt};
-use crate::ops::{BinOp, UnOp};
 use crate::sema::Type;
+
 use anyhow::{Context as _, Result, bail};
-use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
 use inkwell::basic_block::BasicBlock;
@@ -14,7 +13,7 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+    BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -90,7 +89,6 @@ impl<'ctx> Codegen<'ctx> {
         let abort_type = context.void_type().fn_type(&[], false);
         let abort_fn = module.add_function("abort", abort_type, None);
         let noreturn_kind = inkwell::attributes::Attribute::get_named_enum_kind_id("noreturn");
-        let noreturn_attr = context.create_enum_attribute(noreturn_kind, 0);
         let noreturn_attr = context.create_enum_attribute(noreturn_kind, 0);
         abort_fn.add_attribute(inkwell::attributes::AttributeLoc::Function, noreturn_attr);
         let rest_alloc_string_type = i8_ptr.fn_type(&[context.i64_type().into()], false);
@@ -178,11 +176,8 @@ impl<'ctx> Codegen<'ctx> {
             return Ok(());
         }
         let i64_ty = self.context.i64_type();
-        let i32_ptr = self
-            .context
-            .i32_type()
-            .ptr_type(inkwell::AddressSpace::default());
-        let bool_ty = self.context.bool_type();
+        let i32_ptr = self.context.ptr_type(inkwell::AddressSpace::default());
+
         let entry = self.context.append_basic_block(self.rest_alloc_fn, "entry");
         self.builder.position_at_end(entry);
         let size = self
@@ -318,19 +313,74 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_return(None)?;
         let entry = self.context.append_basic_block(self.rest_retain_string_fn, "entry");
         self.builder.position_at_end(entry);
-        let retain_s = self.rest_retain_string_fn.get_nth_param(0).unwrap();
-        self.builder.build_return(Some(&retain_s))?;
+        let retain_s_val = self.rest_retain_string_fn.get_nth_param(0).unwrap();
+        let retain_s = retain_s_val.into_pointer_value();
+        let null_bb_ret = self.context.append_basic_block(self.rest_retain_string_fn, "null");
+        let not_null_bb_ret = self.context.append_basic_block(self.rest_retain_string_fn, "not_null");
+        let is_null_ret = self.builder.build_is_null(retain_s, "is_null")?;
+        self.builder.build_conditional_branch(is_null_ret, null_bb_ret, not_null_bb_ret)?;
+
+        self.builder.position_at_end(null_bb_ret);
+        self.builder.build_return(Some(&retain_s_val))?;
+
+        self.builder.position_at_end(not_null_bb_ret);
+        let rc_ptr_ret = self.builder.build_pointer_cast(retain_s, self.context.ptr_type(inkwell::AddressSpace::default()), "rc_ptr")?;
+        self.builder.build_atomicrmw(
+            inkwell::AtomicRMWBinOp::Add,
+            rc_ptr_ret,
+            self.context.i64_type().const_int(1, false),
+            inkwell::AtomicOrdering::SequentiallyConsistent,
+        )?;
+        self.builder.build_return(Some(&retain_s_val))?;
 
         let entry = self.context.append_basic_block(self.rest_release_string_fn, "entry");
         self.builder.position_at_end(entry);
+        let rel_s = self.rest_release_string_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let null_bb_rel = self.context.append_basic_block(self.rest_release_string_fn, "null");
+        let not_null_bb_rel = self.context.append_basic_block(self.rest_release_string_fn, "not_null");
+        let is_null_rel = self.builder.build_is_null(rel_s, "is_null")?;
+        self.builder.build_conditional_branch(is_null_rel, null_bb_rel, not_null_bb_rel)?;
+
+        self.builder.position_at_end(null_bb_rel);
+        self.builder.build_return(None)?;
+
+        self.builder.position_at_end(not_null_bb_rel);
+        let rc_ptr_rel = self.builder.build_pointer_cast(rel_s, self.context.ptr_type(inkwell::AddressSpace::default()), "rc_ptr")?;
+        let old_rc = self.builder.build_atomicrmw(
+            inkwell::AtomicRMWBinOp::Sub,
+            rc_ptr_rel,
+            self.context.i64_type().const_int(1, false),
+            inkwell::AtomicOrdering::SequentiallyConsistent,
+        )?;
+        let is_one = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            old_rc,
+            self.context.i64_type().const_int(1, false),
+            "is_one",
+        )?;
+
+        let free_bb = self.context.append_basic_block(self.rest_release_string_fn, "free");
+        let end_bb = self.context.append_basic_block(self.rest_release_string_fn, "end");
+        self.builder.build_conditional_branch(is_one, free_bb, end_bb)?;
+
+        self.builder.position_at_end(free_bb);
+        let data_field_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), rel_s, &[self.context.i64_type().const_int(16, false)], "data_field_ptr")? };
+        let i8_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let data_field_ptr_casted = self.builder.build_pointer_cast(data_field_ptr, self.context.ptr_type(inkwell::AddressSpace::default()), "data_field_ptr_casted")?;
+        let data_ptr = self.builder.build_load(i8_ptr_ty, data_field_ptr_casted, "data_ptr")?;
+        self.builder.build_call(self.free_fn, &[data_ptr.into()], "free_data")?;
+        self.builder.build_call(self.free_fn, &[rel_s.into()], "free_struct")?;
+        self.builder.build_unconditional_branch(end_bb)?;
+
+        self.builder.position_at_end(end_bb);
         self.builder.build_return(None)?;
 
         let entry = self.context.append_basic_block(self.rest_print_string_fn, "entry");
         self.builder.position_at_end(entry);
         let print_s = self.rest_print_string_fn.get_nth_param(0).unwrap().into_pointer_value();
         let data_field_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), print_s, &[self.context.i64_type().const_int(16, false)], "data_field_ptr")? };
-        let i8_ptr_ty = self.context.i8_type().ptr_type(inkwell::AddressSpace::default());
-        let data_field_ptr_casted = self.builder.build_pointer_cast(data_field_ptr, i8_ptr_ty.ptr_type(inkwell::AddressSpace::default()), "data_field_ptr_casted")?;
+        let i8_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let data_field_ptr_casted = self.builder.build_pointer_cast(data_field_ptr, self.context.ptr_type(inkwell::AddressSpace::default()), "data_field_ptr_casted")?;
         let data_ptr = self.builder.build_load(i8_ptr_ty, data_field_ptr_casted, "data_ptr")?;
         self.builder.build_call(self.printf_fn, &[data_ptr.into()], "printf")?;
         self.builder.build_return(None)?;
@@ -338,8 +388,8 @@ impl<'ctx> Codegen<'ctx> {
         // rest_streq(s1, s2): равны ли две Rest-строки по содержимому.
         // Сначала сравниваем длины (len@8), при равенстве — memcmp данных (data@16).
         let seq_i64_ty = self.context.i64_type();
-        let seq_i64_ptr_ty = seq_i64_ty.ptr_type(inkwell::AddressSpace::default());
-        let seq_i8_ptr_ptr_ty = i8_ptr_ty.ptr_type(inkwell::AddressSpace::default());
+        let seq_i64_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let seq_i8_ptr_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         let memcmp_ty = self
             .context
             .i32_type()
@@ -384,8 +434,8 @@ impl<'ctx> Codegen<'ctx> {
         let entry = self.context.append_basic_block(self.strcat_fn, "entry");
         self.builder.position_at_end(entry);
         let i64_ty = self.context.i64_type();
-        let i64_ptr_ty = i64_ty.ptr_type(inkwell::AddressSpace::default());
-        let i8_ptr_ptr_ty = i8_ptr_ty.ptr_type(inkwell::AddressSpace::default());
+        let i64_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i8_ptr_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         let s1 = self.strcat_fn.get_nth_param(0).unwrap().into_pointer_value();
         let s2 = self.strcat_fn.get_nth_param(1).unwrap().into_pointer_value();
 
@@ -408,9 +458,9 @@ impl<'ctx> Codegen<'ctx> {
         let data2_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s2, &[i64_ty.const_int(16, false)], "data2_pp")? };
         let data2_pp_c = self.builder.build_pointer_cast(data2_pp, i8_ptr_ptr_ty, "data2_pp_c")?;
         let data2 = self.builder.build_load(i8_ptr_ty, data2_pp_c, "data2")?.into_pointer_value();
-        let dataR_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), result, &[i64_ty.const_int(16, false)], "dataR_pp")? };
-        let dataR_pp_c = self.builder.build_pointer_cast(dataR_pp, i8_ptr_ptr_ty, "dataR_pp_c")?;
-        let data_r = self.builder.build_load(i8_ptr_ty, dataR_pp_c, "data_r")?.into_pointer_value();
+        let data_r_pp = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), result, &[i64_ty.const_int(16, false)], "data_r_pp")? };
+        let data_r_pp_c = self.builder.build_pointer_cast(data_r_pp, i8_ptr_ptr_ty, "data_r_pp_c")?;
+        let data_r = self.builder.build_load(i8_ptr_ty, data_r_pp_c, "data_r")?.into_pointer_value();
 
         // memcpy(dataR, data1, len1); memcpy(dataR + len1, data2, len2)
         let bool_false = self.context.bool_type().const_zero();
@@ -425,10 +475,10 @@ impl<'ctx> Codegen<'ctx> {
         let s_len = self.rest_alloc_string_fn.get_nth_param(0).unwrap().into_int_value();
         let struct_size = self.context.i64_type().const_int(24, false);
         let s_ptr = self.builder.build_call(self.malloc_fn, &[struct_size.into()], "malloc_struct")?.try_as_basic_value().basic().unwrap().into_pointer_value();
-        let rc_ptr = self.builder.build_pointer_cast(s_ptr, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "rc_ptr")?;
+        let rc_ptr = self.builder.build_pointer_cast(s_ptr, self.context.ptr_type(inkwell::AddressSpace::default()), "rc_ptr")?;
         self.builder.build_store(rc_ptr, self.context.i64_type().const_int(1, false))?;
         let len_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s_ptr, &[self.context.i64_type().const_int(8, false)], "len_ptr")? };
-        let len_ptr_i64 = self.builder.build_pointer_cast(len_ptr, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "len_ptr_i64")?;
+        let len_ptr_i64 = self.builder.build_pointer_cast(len_ptr, self.context.ptr_type(inkwell::AddressSpace::default()), "len_ptr_i64")?;
         self.builder.build_store(len_ptr_i64, s_len)?;
         let one = self.context.i64_type().const_int(1, false);
         let data_len = self.builder.build_int_add(s_len, one, "data_len")?;
@@ -436,7 +486,7 @@ impl<'ctx> Codegen<'ctx> {
         let null_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), data_ptr, &[s_len], "null_ptr")? };
         self.builder.build_store(null_ptr, self.context.i8_type().const_zero())?;
         let data_field_ptr = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), s_ptr, &[self.context.i64_type().const_int(16, false)], "data_field_ptr")? };
-        let data_field_ptr_casted = self.builder.build_pointer_cast(data_field_ptr, i8_ptr_ty.ptr_type(inkwell::AddressSpace::default()), "data_field_ptr_casted")?;
+        let data_field_ptr_casted = self.builder.build_pointer_cast(data_field_ptr, self.context.ptr_type(inkwell::AddressSpace::default()), "data_field_ptr_casted")?;
         self.builder.build_store(data_field_ptr_casted, data_ptr)?;
         self.builder.build_return(Some(&s_ptr))?;
 
@@ -998,40 +1048,7 @@ impl<'ctx> Codegen<'ctx> {
         }
         Ok(())
     }
-    pub(crate) fn compile_ref(
-        &mut self,
-        inner: &HirExpr,
-        struct_field_types: &StructFieldTypes,
-    ) -> Result<BasicValueEnum<'ctx>> {
-        match inner {
-            HirExpr::Ident { name, .. } => {
-                let &(alloca, load_ty) = self
-                    .lookup_value(name)
-                    .ok_or_else(|| anyhow::anyhow!("undefined variable `{}`", name))?;
-                if load_ty.is_pointer_type() {
-                    let loaded = self.builder.build_load(self.ptr_ty(), alloca, name)?;
-                    Ok(loaded)
-                } else {
-                    let casted = self.builder.build_pointer_cast(
-                        alloca,
-                        self.ptr_ty(),
-                        &format!("{}_ref", name),
-                    )?;
-                    Ok(casted.into())
-                }
-            }
-            _ => {
-                let val = self.compile_expr(inner, struct_field_types)?;
-                let val_ty = val.get_type();
-                let alloca = self.builder.build_alloca(val_ty, "ref_tmp")?;
-                self.builder.build_store(alloca, val)?;
-                let casted =
-                    self.builder
-                        .build_pointer_cast(alloca, self.ptr_ty(), "ref_tmp_cast")?;
-                Ok(casted.into())
-            }
-        }
-    }
+
     pub(crate) fn compile_print(
         &mut self,
         arg: &HirExpr,
@@ -1133,4 +1150,31 @@ pub fn generate(
             Ok(())
         }
     }
+}
+
+pub fn execute_jit(
+    hir: &[HirStmt],
+    struct_field_types: StructFieldTypes,
+    opt_level: OptimizationLevel,
+) -> Result<i32> {
+    inkwell::targets::Target::initialize_native(&inkwell::targets::InitializationConfig::default())
+        .map_err(|e| anyhow::anyhow!("Failed to initialize native target: {}", e))?;
+        
+    let context = Context::create();
+    let mut codegen = Codegen::new(&context, "jit_module");
+    codegen.compile(hir, &struct_field_types)?;
+
+    let engine = codegen
+        .module
+        .create_jit_execution_engine(opt_level)
+        .map_err(|e| anyhow::anyhow!("Failed to create JIT engine: {:?}", e))?;
+        
+    let main_func = unsafe {
+        engine
+            .get_function::<unsafe extern "C" fn() -> i32>("main")
+            .map_err(|e| anyhow::anyhow!("Failed to find main function: {:?}", e))?
+    };
+        
+    let ret = unsafe { main_func.call() };
+    Ok(ret)
 }

@@ -1,4 +1,5 @@
 use super::*;
+use inkwell::values::BasicMetadataValueEnum;
 impl<'ctx> Codegen<'ctx> {
     pub(crate) fn bool_from_value(
         &self,
@@ -133,7 +134,7 @@ impl<'ctx> Codegen<'ctx> {
                 )
                 .unwrap()
         };
-        let i8_ptr_ptr_ty = i8_ptr_ty.ptr_type(inkwell::AddressSpace::default());
+        let i8_ptr_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         let casted_ptr_ptr = self
             .builder
             .build_pointer_cast(payload_ptr_ptr, i8_ptr_ptr_ty, "cast_ptr_ptr")
@@ -206,7 +207,7 @@ impl<'ctx> Codegen<'ctx> {
                 } else {
                     let ptr = arr_ptr.into_pointer_value();
                     let elem_ty = self.type_of_expr(object, struct_field_types);
-                    let (elem_llvm_ty, target_ty) = match elem_ty {
+                    let (elem_llvm_ty, _target_ty) = match elem_ty {
                         Type::Pointer(inner) => (self.hir_type_to_basic(&inner, struct_field_types), *inner),
                         _ => (self.context.i8_type().into(), Type::I8),
                     };
@@ -897,7 +898,7 @@ impl<'ctx> Codegen<'ctx> {
                         "str_payload_ptr_ptr",
                     )?
             };
-            let i8_ptr_ptr_ty = self.ptr_ty().ptr_type(inkwell::AddressSpace::default());
+            let i8_ptr_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
             let casted_ptr_ptr = self.builder.build_pointer_cast(payload_ptr_ptr, i8_ptr_ptr_ty, "cast_ptr_ptr")?;
             let payload_ptr = self.builder.build_load(self.ptr_ty(), casted_ptr_ptr, "payload_ptr")?.into_pointer_value();
             return Ok(self

@@ -1,9 +1,0 @@
-import "import_helper";
-
-def main() -> i32 {
-    let result = helper_fn();
-    if result == 42 {
-        print("Import works!\n");
-    }
-    return 0;
-}
